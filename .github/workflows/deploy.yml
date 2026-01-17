@@ -16,27 +16,29 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      # ✅ FIX 1: Build with a supported Node version
+      - name: Setup Node.js (CI only)
         uses: actions/setup-node@v4
         with:
-          node-version: "18"
+          node-version: "20.19.0"
 
       - name: Retrieve .env from Live Site
         run: |
           $ErrorActionPreference = "Stop"
           $PROD_ENV = "C:\Server\htdocs\cajasmart\.env"
           if (Test-Path $PROD_ENV) {
-            Copy-Item -Path $PROD_ENV -Destination (Join-Path $env:GITHUB_WORKSPACE ".env") -Force
+            Copy-Item $PROD_ENV (Join-Path $env:GITHUB_WORKSPACE ".env") -Force
           } else {
             Write-Warning "No .env found at $PROD_ENV"
           }
 
-      - name: Install Dependencies (no scripts)
+      # ✅ FIX 2: DO NOT ignore scripts (Nuxt/Vite/Tailwind require them)
+      - name: Install Dependencies
         run: |
           $ErrorActionPreference = "Stop"
           Set-Location $env:GITHUB_WORKSPACE
-          if (Test-Path ".\node_modules") { Remove-Item -Recurse -Force ".\node_modules" }
-          npm install --ignore-scripts
+          if (Test-Path node_modules) { Remove-Item node_modules -Recurse -Force }
+          npm install
 
       - name: Prepare + Build
         run: |
@@ -45,28 +47,33 @@ jobs:
           npx nuxi prepare
           npm run build
 
+      # ✅ FIX 3: Deploy ONLY build output, not source
       - name: Deploy to Production Folder
         run: |
           $ErrorActionPreference = "Stop"
           $TARGET = "C:\Server\htdocs\cajasmart"
 
-          if (!(Test-Path -Path $TARGET)) { New-Item -ItemType Directory -Force -Path $TARGET | Out-Null }
+          if (!(Test-Path $TARGET)) {
+            New-Item -ItemType Directory -Force -Path $TARGET | Out-Null
+          }
 
           try { pm2 stop cajasmart } catch {}
 
-          Copy-Item -Path (Join-Path $env:GITHUB_WORKSPACE "*") `
-                    -Destination $TARGET `
-                    -Recurse -Force `
-                    -Exclude ".git","node_modules",".github",".env" `
-                    -ErrorAction Stop
+          # Clean target except .env
+          Get-ChildItem $TARGET -Force |
+            Where-Object { $_.Name -ne ".env" } |
+            Remove-Item -Recurse -Force
 
-          if (!(Test-Path (Join-Path $TARGET "package.json"))) {
-            Get-ChildItem -Force $TARGET | Select-Object -First 200
-            throw "DEPLOY FAILED: package.json missing in $TARGET"
-          }
+          # Copy build output
+          Copy-Item ".output\*" $TARGET -Recurse -Force
 
+          # Runtime deps only (uses SERVER Node, unchanged)
           Set-Location $TARGET
-          if (Test-Path ".\node_modules") { Remove-Item -Recurse -Force ".\node_modules" }
+          if (Test-Path node_modules) { Remove-Item node_modules -Recurse -Force }
           npm install --omit=dev --ignore-scripts
 
-          try { pm2 restart cajasmart --update-env } catch { pm2 start process.yml }
+          try {
+            pm2 restart cajasmart --update-env
+          } catch {
+            pm2 start process.yml
+          }
