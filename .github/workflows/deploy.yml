@@ -21,18 +21,6 @@ jobs:
         with:
           node-version: "18"
 
-      - name: Debug runner + workspace
-        run: |
-          $ErrorActionPreference = "Stop"
-          Write-Host "HOSTNAME: $env:COMPUTERNAME"
-          Write-Host "WHOAMI:"
-          whoami
-          Write-Host "PWD: $(Get-Location)"
-          Write-Host "GITHUB_WORKSPACE: $env:GITHUB_WORKSPACE"
-          if (!(Test-Path $env:GITHUB_WORKSPACE)) { throw "GITHUB_WORKSPACE does not exist" }
-          Write-Host "Workspace top-level files:"
-          Get-ChildItem -Force $env:GITHUB_WORKSPACE | Select-Object -First 50
-
       - name: Retrieve .env from Live Site
         run: |
           $ErrorActionPreference = "Stop"
@@ -50,53 +38,35 @@ jobs:
           if (Test-Path ".\node_modules") { Remove-Item -Recurse -Force ".\node_modules" }
           npm install --ignore-scripts
 
-      - name: Prepare Nuxt
+      - name: Prepare + Build
         run: |
           $ErrorActionPreference = "Stop"
           Set-Location $env:GITHUB_WORKSPACE
           npx nuxi prepare
-
-      - name: Build Application
-        run: |
-          $ErrorActionPreference = "Stop"
-          Set-Location $env:GITHUB_WORKSPACE
           npm run build
 
       - name: Deploy to Production Folder
         run: |
           $ErrorActionPreference = "Stop"
-
           $TARGET = "C:\Server\htdocs\cajasmart"
+
           if (!(Test-Path -Path $TARGET)) { New-Item -ItemType Directory -Force -Path $TARGET | Out-Null }
 
-          Write-Host "Stopping App..."
           try { pm2 stop cajasmart } catch {}
 
-          Write-Host "Copying from workspace => target"
-          Write-Host "FROM: $env:GITHUB_WORKSPACE"
-          Write-Host "TO:   $TARGET"
-
-          # Copy repo contents (do NOT overwrite prod .env)
           Copy-Item -Path (Join-Path $env:GITHUB_WORKSPACE "*") `
                     -Destination $TARGET `
                     -Recurse -Force `
                     -Exclude ".git","node_modules",".github",".env" `
                     -ErrorAction Stop
 
-          # HARD VERIFY (fail job if nothing was copied)
           if (!(Test-Path (Join-Path $TARGET "package.json"))) {
-            Write-Host "Target directory listing:"
             Get-ChildItem -Force $TARGET | Select-Object -First 200
-            throw "DEPLOY FAILED: package.json not found in $TARGET (copy did not happen)"
+            throw "DEPLOY FAILED: package.json missing in $TARGET"
           }
 
-          Write-Host "Installing production deps..."
           Set-Location $TARGET
           if (Test-Path ".\node_modules") { Remove-Item -Recurse -Force ".\node_modules" }
           npm install --omit=dev --ignore-scripts
 
-          Write-Host "Starting App..."
           try { pm2 restart cajasmart --update-env } catch { pm2 start process.yml }
-
-          Write-Host "Final target listing:"
-          Get-ChildItem -Force $TARGET | Select-Object -First 200
