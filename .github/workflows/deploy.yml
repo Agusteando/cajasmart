@@ -13,70 +13,90 @@ jobs:
         shell: powershell
 
     steps:
-      # 1. Get latest code
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 2. Setup Node
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "18"
 
-      # 3. COPY EXISTING .ENV FROM SERVER
+      - name: Debug runner + workspace
+        run: |
+          $ErrorActionPreference = "Stop"
+          Write-Host "HOSTNAME: $env:COMPUTERNAME"
+          Write-Host "WHOAMI:"
+          whoami
+          Write-Host "PWD: $(Get-Location)"
+          Write-Host "GITHUB_WORKSPACE: $env:GITHUB_WORKSPACE"
+          if (!(Test-Path $env:GITHUB_WORKSPACE)) { throw "GITHUB_WORKSPACE does not exist" }
+          Write-Host "Workspace top-level files:"
+          Get-ChildItem -Force $env:GITHUB_WORKSPACE | Select-Object -First 50
+
       - name: Retrieve .env from Live Site
         run: |
+          $ErrorActionPreference = "Stop"
           $PROD_ENV = "C:\Server\htdocs\cajasmart\.env"
-
           if (Test-Path $PROD_ENV) {
-            Write-Host "Copying .env from production folder..."
-            Copy-Item -Path $PROD_ENV -Destination ".\.env" -Force
+            Copy-Item -Path $PROD_ENV -Destination (Join-Path $env:GITHUB_WORKSPACE ".env") -Force
           } else {
-            Write-Warning "CRITICAL: .env file not found at $PROD_ENV. Ensure it exists on the server!"
+            Write-Warning "No .env found at $PROD_ENV"
           }
 
-      # 4. Install Dependencies (For Build)
-      - name: Install Dependencies
+      - name: Install Dependencies (no scripts)
         run: |
+          $ErrorActionPreference = "Stop"
+          Set-Location $env:GITHUB_WORKSPACE
           if (Test-Path ".\node_modules") { Remove-Item -Recurse -Force ".\node_modules" }
           npm install --ignore-scripts
 
-      # 5. Build Nuxt
-      - name: Build Application
-        run: npm run build
+      - name: Prepare Nuxt
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-Location $env:GITHUB_WORKSPACE
+          npx nuxi prepare
 
-      # 6. Deploy to Production (Stop -> Copy -> Start)
+      - name: Build Application
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-Location $env:GITHUB_WORKSPACE
+          npm run build
+
       - name: Deploy to Production Folder
         run: |
-          $TARGET = "C:\Server\htdocs\cajasmart"
+          $ErrorActionPreference = "Stop"
 
-          # Create target if not exists
+          $TARGET = "C:\Server\htdocs\cajasmart"
           if (!(Test-Path -Path $TARGET)) { New-Item -ItemType Directory -Force -Path $TARGET | Out-Null }
 
-          # STOP THE APP (Releases file locks)
-          Write-Host "Stopping App to release file locks..."
-          try { pm2 stop cajasmart } catch { Write-Host "App was not running, skipping stop." }
+          Write-Host "Stopping App..."
+          try { pm2 stop cajasmart } catch {}
 
-          # Copy everything from Runner to Target (don't overwrite prod .env)
-          Write-Host "Deploying files to $TARGET..."
-          Copy-Item -Path ".\*" -Destination $TARGET -Recurse -Force -Exclude ".git","node_modules",".github",".env"
+          Write-Host "Copying from workspace => target"
+          Write-Host "FROM: $env:GITHUB_WORKSPACE"
+          Write-Host "TO:   $TARGET"
 
-          # Go to target
+          # Copy repo contents (do NOT overwrite prod .env)
+          Copy-Item -Path (Join-Path $env:GITHUB_WORKSPACE "*") `
+                    -Destination $TARGET `
+                    -Recurse -Force `
+                    -Exclude ".git","node_modules",".github",".env" `
+                    -ErrorAction Stop
+
+          # HARD VERIFY (fail job if nothing was copied)
+          if (!(Test-Path (Join-Path $TARGET "package.json"))) {
+            Write-Host "Target directory listing:"
+            Get-ChildItem -Force $TARGET | Select-Object -First 200
+            throw "DEPLOY FAILED: package.json not found in $TARGET (copy did not happen)"
+          }
+
+          Write-Host "Installing production deps..."
           Set-Location $TARGET
-
-          # Install prod dependencies
-          Write-Host "Installing production dependencies..."
           if (Test-Path ".\node_modules") { Remove-Item -Recurse -Force ".\node_modules" }
           npm install --omit=dev --ignore-scripts
 
-          # Start/Restart PM2
           Write-Host "Starting App..."
-          try {
-            pm2 restart cajasmart --update-env
-          } catch {
-            pm2 start process.yml
-          }
+          try { pm2 restart cajasmart --update-env } catch { pm2 start process.yml }
 
-          # Quick sanity check
-          Write-Host "Target contents:"
-          Get-ChildItem -Force | Select-Object -First 50
+          Write-Host "Final target listing:"
+          Get-ChildItem -Force $TARGET | Select-Object -First 200
