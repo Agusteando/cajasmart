@@ -10,66 +10,73 @@ jobs:
 
     defaults:
       run:
-        shell: cmd
-
-    env:
-      TARGET: C:\Server\htdocs\cajasmart
-      PROD_ENV: C:\Server\htdocs\cajasmart\.env
+        shell: powershell
 
     steps:
+      # 1. Get latest code
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # 2. Setup Node
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "18"
 
-      - name: Copy .env from production for build (do not overwrite on deploy)
+      # 3. COPY EXISTING .ENV FROM SERVER
+      - name: Retrieve .env from Live Site
         run: |
-          if exist "%PROD_ENV%" (
-            copy /Y "%PROD_ENV%" ".env"
-          ) else (
-            echo WARNING: .env not found at "%PROD_ENV%"
-          )
+          $PROD_ENV = "C:\Server\htdocs\cajasmart\.env"
 
-      - name: Clean workspace deps
-        run: |
-          if exist node_modules rmdir /s /q node_modules
+          if (Test-Path $PROD_ENV) {
+            Write-Host "Copying .env from production folder..."
+            Copy-Item -Path $PROD_ENV -Destination ".\.env" -Force
+          } else {
+            Write-Warning "CRITICAL: .env file not found at $PROD_ENV. Ensure it exists on the server!"
+          }
 
-      - name: Install deps (deterministic, no scripts)
+      # 4. Install Dependencies (For Build)
+      - name: Install Dependencies
         run: |
-          npm ci --ignore-scripts
+          if (Test-Path ".\node_modules") { Remove-Item -Recurse -Force ".\node_modules" }
+          npm install --ignore-scripts
 
-      - name: Prepare Nuxt
-        run: |
-          npx nuxi prepare
+      # 5. Build Nuxt
+      - name: Build Application
+        run: npm run build
 
-      - name: Build
+      # 6. Deploy to Production (Stop -> Copy -> Start)
+      - name: Deploy to Production Folder
         run: |
-          npm run build
+          $TARGET = "C:\Server\htdocs\cajasmart"
 
-      - name: Ensure target exists
-        run: |
-          if not exist "%TARGET%" mkdir "%TARGET%"
+          # Create target if not exists
+          if (!(Test-Path -Path $TARGET)) { New-Item -ItemType Directory -Force -Path $TARGET | Out-Null }
 
-      - name: Stop app
-        run: |
-          pm2 stop cajasmart || echo not running
+          # STOP THE APP (Releases file locks)
+          Write-Host "Stopping App to release file locks..."
+          try { pm2 stop cajasmart } catch { Write-Host "App was not running, skipping stop." }
 
-      - name: Deploy files (robocopy, excludes node_modules/.git/.github and .env)
-        run: |
-          robocopy "." "%TARGET%" /E /XD node_modules .git .github /XF .env
-          set RC=%ERRORLEVEL%
-          if %RC% LSS 8 (exit /b 0) else (exit /b %RC%)
+          # Copy everything from Runner to Target (don't overwrite prod .env)
+          Write-Host "Deploying files to $TARGET..."
+          Copy-Item -Path ".\*" -Destination $TARGET -Recurse -Force -Exclude ".git","node_modules",".github",".env"
 
-      - name: Install production deps on target (no scripts)
-        run: |
-          cd /d "%TARGET%"
-          if exist node_modules rmdir /s /q node_modules
-          npm ci --omit=dev --ignore-scripts
+          # Go to target
+          Set-Location $TARGET
 
-      - name: Start app
-        run: |
-          cd /d "%TARGET%"
-          pm2 restart cajasmart --update-env || pm2 start process.yml
+          # Install prod dependencies
+          Write-Host "Installing production dependencies..."
+          if (Test-Path ".\node_modules") { Remove-Item -Recurse -Force ".\node_modules" }
+          npm install --omit=dev --ignore-scripts
+
+          # Start/Restart PM2
+          Write-Host "Starting App..."
+          try {
+            pm2 restart cajasmart --update-env
+          } catch {
+            pm2 start process.yml
+          }
+
+          # Quick sanity check
+          Write-Host "Target contents:"
+          Get-ChildItem -Force | Select-Object -First 50
