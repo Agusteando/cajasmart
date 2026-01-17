@@ -16,7 +16,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # ✅ FIX 1: Build with a supported Node version
+      # Build toolchain needs Node 20+ (does NOT change your server install)
       - name: Setup Node.js (CI only)
         uses: actions/setup-node@v4
         with:
@@ -32,7 +32,6 @@ jobs:
             Write-Warning "No .env found at $PROD_ENV"
           }
 
-      # ✅ FIX 2: DO NOT ignore scripts (Nuxt/Vite/Tailwind require them)
       - name: Install Dependencies
         run: |
           $ErrorActionPreference = "Stop"
@@ -47,7 +46,6 @@ jobs:
           npx nuxi prepare
           npm run build
 
-      # ✅ FIX 3: Deploy ONLY build output, not source
       - name: Deploy to Production Folder
         run: |
           $ErrorActionPreference = "Stop"
@@ -57,7 +55,8 @@ jobs:
             New-Item -ItemType Directory -Force -Path $TARGET | Out-Null
           }
 
-          try { pm2 stop cajasmart } catch {}
+          # Stop if running (don't fail the job if not)
+          pm2 delete cajasmart -s 2>$null
 
           # Clean target except .env
           Get-ChildItem $TARGET -Force |
@@ -65,15 +64,16 @@ jobs:
             Remove-Item -Recurse -Force
 
           # Copy build output
-          Copy-Item ".output\*" $TARGET -Recurse -Force
+          Copy-Item (Join-Path $env:GITHUB_WORKSPACE ".output\*") $TARGET -Recurse -Force
 
-          # Runtime deps only (uses SERVER Node, unchanged)
+          # Ensure PM2 config is present in target
+          Copy-Item (Join-Path $env:GITHUB_WORKSPACE "process.yml") $TARGET -Force
+
+          # Install runtime deps in the deployed folder (Nitro node-server needs these)
           Set-Location $TARGET
           if (Test-Path node_modules) { Remove-Item node_modules -Recurse -Force }
           npm install --omit=dev --ignore-scripts
 
-          try {
-            pm2 restart cajasmart --update-env
-          } catch {
-            pm2 start process.yml
-          }
+          # Start app
+          pm2 start process.yml
+          pm2 save

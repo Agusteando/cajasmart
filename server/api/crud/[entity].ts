@@ -1,50 +1,58 @@
-import { useDb } from '~/server/utils/db';
-
 export default defineEventHandler(async (event) => {
-  const entity = event.context.params.entity; // 'users', 'planteles', 'roles'
+  // Read params
+  const entity = event.context.params?.entity;
   const method = event.node.req.method;
+  
+  // Security Allowlist (Prevent SQL Injection on table names)
+  const allowedEntities = ['users', 'planteles', 'roles'];
+  if (!entity || !allowedEntities.includes(entity)) {
+    throw createError({ statusCode: 403, statusMessage: 'Forbidden Entity' });
+  }
+
   const db = await useDb();
 
-  // Security Check (In prod, check session here)
-  const allowedEntities = ['users', 'planteles', 'roles'];
-  if (!allowedEntities.includes(entity)) throw createError({ statusCode: 403 });
-
+  // GET: List all
   if (method === 'GET') {
-    // Fetch All
     const [rows] = await db.execute(`SELECT * FROM ${entity} ORDER BY id DESC`);
     return rows;
   }
 
+  // POST: Create
   if (method === 'POST') {
-    // Create New
     const body = await readBody(event);
     const keys = Object.keys(body);
     const values = Object.values(body);
-    const placeholders = keys.map(() => '?').join(',');
     
-    await db.execute(
-      `INSERT INTO ${entity} (${keys.join(',')}) VALUES (${placeholders})`, 
-      values
-    );
+    // Construct SQL: INSERT INTO table (col1, col2) VALUES (?, ?)
+    const placeholders = keys.map(() => '?').join(',');
+    const sql = `INSERT INTO ${entity} (${keys.join(',')}) VALUES (${placeholders})`;
+    
+    await db.execute(sql, values);
     return { success: true };
   }
 
+  // PUT: Update
   if (method === 'PUT') {
-    // Update
     const body = await readBody(event);
     const id = body.id;
-    delete body.id; // Don't update ID
-    
-    const updates = Object.keys(body).map(k => `${k} = ?`).join(',');
-    const values = [...Object.values(body), id];
+    delete body.id; // Remove ID from update fields
 
-    await db.execute(`UPDATE ${entity} SET ${updates} WHERE id = ?`, values);
+    const keys = Object.keys(body);
+    const values = Object.values(body);
+    
+    // Construct SQL: UPDATE table SET col1=?, col2=? WHERE id=?
+    const setClause = keys.map(k => `${k} = ?`).join(',');
+    const sql = `UPDATE ${entity} SET ${setClause} WHERE id = ?`;
+    
+    await db.execute(sql, [...values, id]);
     return { success: true };
   }
 
+  // DELETE
   if (method === 'DELETE') {
     const query = getQuery(event);
-    await db.execute(`DELETE FROM ${entity} WHERE id = ?`, [query.id]);
+    const id = query.id;
+    await db.execute(`DELETE FROM ${entity} WHERE id = ?`, [id]);
     return { success: true };
   }
 });
