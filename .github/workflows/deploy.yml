@@ -9,78 +9,58 @@ jobs:
     runs-on: self-hosted
 
     steps:
-      # 1. Get latest code
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 2. Setup Node
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "18"
 
-      # 3. COPY EXISTING .ENV FROM SERVER
       - name: Retrieve .env from Live Site
         shell: pwsh
         run: |
           $PROD_ENV = "C:\Server\htdocs\cajasmart\.env"
-
           if (Test-Path $PROD_ENV) {
-            Write-Host "Copying .env from production folder..."
             Copy-Item -Path $PROD_ENV -Destination ".\.env" -Force
-          } else {
-            Write-Warning "CRITICAL: .env file not found at $PROD_ENV. Ensure it exists on the server!"
           }
 
-      # 4. Clean deps to avoid optional-deps native binding misses on Windows
-      - name: Clean install artifacts
+      - name: Clean install state
         shell: pwsh
         run: |
-          if (Test-Path ".\node_modules") { Remove-Item -Recurse -Force ".\node_modules" }
-          if (Test-Path ".\package-lock.json") { Remove-Item -Force ".\package-lock.json" }
-          npm cache verify | Out-Null
+          if (Test-Path node_modules) { Remove-Item -Recurse -Force node_modules }
+          if (Test-Path package-lock.json) { Remove-Item -Force package-lock.json }
 
-      # 5. Install Dependencies (For Build) - force optional deps
-      - name: Install Dependencies
+      - name: Install dependencies (no scripts)
         shell: pwsh
-        run: |
-          npm install --include=optional
+        run: npm install --ignore-scripts
 
-      # 6. Build Nuxt
-      - name: Build Application
+      - name: Prepare Nuxt
         shell: pwsh
-        run: |
-          npm run build
+        run: npx nuxi prepare
 
-      # 7. Deploy to Production (Stop -> Copy -> Install -> Start)
+      - name: Build
+        shell: pwsh
+        run: npm run build
+
       - name: Deploy to Production Folder
         shell: pwsh
         run: |
           $TARGET = "C:\Server\htdocs\cajasmart"
 
-          # Create target if not exists
-          if (!(Test-Path -Path $TARGET)) { New-Item -ItemType Directory -Force -Path $TARGET | Out-Null }
+          if (!(Test-Path $TARGET)) {
+            New-Item -ItemType Directory -Force -Path $TARGET | Out-Null
+          }
 
-          # STOP THE APP (Releases file locks on .nuxt folder)
-          Write-Host "Stopping App to release file locks..."
-          try { pm2 stop cajasmart } catch { Write-Host "App was not running, skipping stop." }
+          try { pm2 stop cajasmart } catch {}
 
-          # Copy everything from Runner to Target
-          # Exclude node_modules (reinstall in target)
-          Write-Host "Deploying files to $TARGET..."
           Copy-Item -Path ".\*" -Destination $TARGET -Recurse -Force -Exclude ".git","node_modules"
 
-          # Go to target
           Set-Location $TARGET
 
-          # Install prod dependencies (still include optional for native bindings)
-          Write-Host "Installing production dependencies..."
-          if (Test-Path ".\node_modules") { Remove-Item -Recurse -Force ".\node_modules" }
-          if (Test-Path ".\package-lock.json") { Remove-Item -Force ".\package-lock.json" }
-          npm install --omit=dev --include=optional
+          if (Test-Path node_modules) { Remove-Item -Recurse -Force node_modules }
+          npm install --omit=dev --ignore-scripts
 
-          # Start/Restart PM2
-          Write-Host "Starting App..."
           try {
             pm2 restart cajasmart --update-env
           } catch {
