@@ -8,6 +8,10 @@ jobs:
   deploy:
     runs-on: self-hosted
 
+    defaults:
+      run:
+        shell: powershell
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -18,7 +22,6 @@ jobs:
           node-version: "18"
 
       - name: Retrieve .env from Live Site
-        shell: powershell
         run: |
           $PROD_ENV = "C:\Server\htdocs\cajasmart\.env"
           if (Test-Path $PROD_ENV) {
@@ -26,25 +29,20 @@ jobs:
           }
 
       - name: Clean install state
-        shell: powershell
         run: |
           if (Test-Path node_modules) { Remove-Item -Recurse -Force node_modules }
           if (Test-Path package-lock.json) { Remove-Item -Force package-lock.json }
 
       - name: Install dependencies (no scripts)
-        shell: powershell
         run: npm install --ignore-scripts
 
       - name: Prepare Nuxt
-        shell: powershell
         run: npx nuxi prepare
 
       - name: Build
-        shell: powershell
         run: npm run build
 
       - name: Deploy to Production Folder
-        shell: powershell
         run: |
           $TARGET = "C:\Server\htdocs\cajasmart"
 
