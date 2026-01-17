@@ -1,0 +1,8 @@
+apps:
+  - name: cajasmart
+    script: .output/server/index.mjs
+    cwd: C:\Server\htdocs\cajasmart
+    interpreter: node
+    env:
+      NODE_ENV: production
+      PORT: 15776

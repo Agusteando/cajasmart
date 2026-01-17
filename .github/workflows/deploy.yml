@@ -1,0 +1,84 @@
+name: Deploy CajaSmart
+
+on:
+  push:
+    branches: ["main"]
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+
+    steps:
+      # 1. Get latest code from GitHub
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 2. Setup Node environment
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      # 3. SECURE ENV RETRIEVAL
+      # We fetch the .env from the server's existing folder so the build can see DB creds if needed
+      - name: Retrieve .env from Live Site
+        run: |
+          $PROD_ENV = "C:\Server\htdocs\cajasmart\.env"
+          
+          if (Test-Path $PROD_ENV) {
+            Write-Host "Copying .env from production folder..."
+            Copy-Item -Path $PROD_ENV -Destination ".\.env" -Force
+          } else {
+            Write-Warning "CRITICAL: .env file not found at $PROD_ENV. Please create it manually on the server first!"
+            exit 1
+          }
+
+      # 4. Install Dependencies
+      - name: Install Dependencies
+        run: npm install
+
+      # 5. Build Nuxt (Creates .output folder)
+      - name: Build Application
+        run: npm run build
+
+      # 6. Deploy Logic
+      - name: Deploy to Production Folder
+        run: |
+          $TARGET = "C:\Server\htdocs\cajasmart"
+          
+          # A. Create target if missing
+          if (!(Test-Path -Path $TARGET)) { New-Item -ItemType Directory -Force -Path $TARGET }
+
+          # B. STOP APP (Releases file locks on Windows)
+          Write-Host "Stopping PM2 Process..."
+          try { pm2 stop cajasmart } catch { Write-Host "App was not running, skipping stop." }
+
+          # C. COPY FILES
+          # We copy the new build (.output), the process.yml, and package.json
+          Write-Host "Deploying files to $TARGET..."
+          
+          # Copy Output (The Build)
+          Copy-Item -Path ".\.output" -Destination $TARGET -Recurse -Force
+          
+          # Copy Configs
+          Copy-Item -Path ".\process.yml" -Destination $TARGET -Force
+          Copy-Item -Path ".\package.json" -Destination $TARGET -Force
+          
+          # Copy Public Uploads folder structure (but don't overwrite existing uploads)
+          if (!(Test-Path "$TARGET\public\uploads")) {
+            New-Item -ItemType Directory -Force -Path "$TARGET\public\uploads"
+          }
+
+          # D. RESTART
+          cd $TARGET
+          
+          Write-Host "Starting App..."
+          # Attempt reload/restart. If it fails (first run), start fresh from config.
+          try { 
+            pm2 reload cajasmart --update-env 
+          } catch { 
+            pm2 start process.yml 
+          }
+          
+          # Save PM2 list so it remembers on reboot
+          pm2 save
