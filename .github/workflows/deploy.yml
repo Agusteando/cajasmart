@@ -12,46 +12,64 @@ jobs:
       run:
         shell: cmd
 
-    steps:
-      - uses: actions/checkout@v4
+    env:
+      TARGET: C:\Server\htdocs\cajasmart
+      PROD_ENV: C:\Server\htdocs\cajasmart\.env
 
-      - uses: actions/setup-node@v4
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: "18"
 
-      - name: Retrieve .env from Live Site
+      - name: Copy .env from production for build (do not overwrite on deploy)
         run: |
-          if exist C:\Server\htdocs\cajasmart\.env (
-            copy /Y C:\Server\htdocs\cajasmart\.env .env
+          if exist "%PROD_ENV%" (
+            copy /Y "%PROD_ENV%" ".env"
+          ) else (
+            echo WARNING: .env not found at "%PROD_ENV%"
           )
 
-      - name: Clean install state
+      - name: Clean workspace deps
         run: |
           if exist node_modules rmdir /s /q node_modules
-          if exist package-lock.json del package-lock.json
 
-      - name: Install dependencies (no scripts)
-        run: npm install --ignore-scripts
+      - name: Install deps (deterministic, no scripts)
+        run: |
+          npm ci --ignore-scripts
 
       - name: Prepare Nuxt
-        run: npx nuxi prepare
+        run: |
+          npx nuxi prepare
 
       - name: Build
-        run: npm run build
-
-      - name: Deploy
         run: |
-          set TARGET=C:\Server\htdocs\cajasmart
+          npm run build
 
-          if not exist %TARGET% mkdir %TARGET%
+      - name: Ensure target exists
+        run: |
+          if not exist "%TARGET%" mkdir "%TARGET%"
 
+      - name: Stop app
+        run: |
           pm2 stop cajasmart || echo not running
 
-          xcopy . %TARGET% /E /I /Y /EXCLUDE:.git,node_modules
+      - name: Deploy files (robocopy, excludes node_modules/.git/.github and .env)
+        run: |
+          robocopy "." "%TARGET%" /E /XD node_modules .git .github /XF .env
+          set RC=%ERRORLEVEL%
+          if %RC% LSS 8 (exit /b 0) else (exit /b %RC%)
 
-          cd /d %TARGET%
-
+      - name: Install production deps on target (no scripts)
+        run: |
+          cd /d "%TARGET%"
           if exist node_modules rmdir /s /q node_modules
-          npm install --omit=dev --ignore-scripts
+          npm ci --omit=dev --ignore-scripts
 
-          pm2 restart cajasmart || pm2 start process.yml
+      - name: Start app
+        run: |
+          cd /d "%TARGET%"
+          pm2 restart cajasmart --update-env || pm2 start process.yml
