@@ -16,64 +16,84 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Build toolchain needs Node 20+ (does NOT change your server install)
+      # Build toolchain needs Node 20+ (does NOT change your server-installed Node)
       - name: Setup Node.js (CI only)
         uses: actions/setup-node@v4
         with:
           node-version: "20.19.0"
 
-      - name: Retrieve .env from Live Site
-        run: |
-          $ErrorActionPreference = "Stop"
-          $PROD_ENV = "C:\Server\htdocs\cajasmart\.env"
-          if (Test-Path $PROD_ENV) {
-            Copy-Item $PROD_ENV (Join-Path $env:GITHUB_WORKSPACE ".env") -Force
-          } else {
-            Write-Warning "No .env found at $PROD_ENV"
-          }
-
-      - name: Install Dependencies
+      - name: Install deps (workspace)
         run: |
           $ErrorActionPreference = "Stop"
           Set-Location $env:GITHUB_WORKSPACE
           if (Test-Path node_modules) { Remove-Item node_modules -Recurse -Force }
           npm install
 
-      - name: Prepare + Build
+      - name: Build (workspace)
         run: |
           $ErrorActionPreference = "Stop"
           Set-Location $env:GITHUB_WORKSPACE
           npx nuxi prepare
           npm run build
 
-      - name: Deploy to Production Folder
+      - name: Deploy to Production Folder (full repo)
         run: |
           $ErrorActionPreference = "Stop"
+
           $TARGET = "C:\Server\htdocs\cajasmart"
+          $PROD_ENV = Join-Path $TARGET ".env"
 
           if (!(Test-Path $TARGET)) {
             New-Item -ItemType Directory -Force -Path $TARGET | Out-Null
           }
 
-          # Stop if running (don't fail the job if not)
+          # Stop/remove existing process (idempotent)
           pm2 delete cajasmart -s 2>$null
 
-          # Clean target except .env
-          Get-ChildItem $TARGET -Force |
-            Where-Object { $_.Name -ne ".env" } |
-            Remove-Item -Recurse -Force
+          # Preserve existing .env if present
+          $envBackup = $null
+          if (Test-Path $PROD_ENV) {
+            $envBackup = Join-Path $env:TEMP ("cajasmart.env." + [guid]::NewGuid().ToString() + ".bak")
+            Copy-Item $PROD_ENV $envBackup -Force
+          }
 
-          # Copy build output
-          Copy-Item (Join-Path $env:GITHUB_WORKSPACE ".output\*") $TARGET -Recurse -Force
+          # Clean target completely
+          Get-ChildItem $TARGET -Force | Remove-Item -Recurse -Force
 
-          # Ensure PM2 config is present in target
-          Copy-Item (Join-Path $env:GITHUB_WORKSPACE "process.yml") $TARGET -Force
+          # Restore .env
+          if ($envBackup -ne $null) {
+            Copy-Item $envBackup $PROD_ENV -Force
+            Remove-Item $envBackup -Force
+          }
 
-          # Install runtime deps in the deployed folder (Nitro node-server needs these)
+          # Copy the entire repo to target (excluding junk)
+          Copy-Item (Join-Path $env:GITHUB_WORKSPACE "*") $TARGET -Recurse -Force `
+            -Exclude ".git",".github","node_modules"
+
+          # Sanity checks: ensure repo + build output exist
+          if (!(Test-Path (Join-Path $TARGET "package.json"))) {
+            throw "DEPLOY FAILED: package.json missing in $TARGET"
+          }
+          if (!(Test-Path (Join-Path $TARGET ".output\server\index.mjs"))) {
+            throw "DEPLOY FAILED: .output\server\index.mjs missing in $TARGET (build output not copied)"
+          }
+          if (!(Test-Path (Join-Path $TARGET "process.yml"))) {
+            throw "DEPLOY FAILED: process.yml missing in $TARGET"
+          }
+
+          # Install prod deps on server folder (runtime deps)
           Set-Location $TARGET
           if (Test-Path node_modules) { Remove-Item node_modules -Recurse -Force }
-          npm install --omit=dev --ignore-scripts
+          npm install --omit=dev
 
-          # Start app
+          # Start app using process.yml
           pm2 start process.yml
           pm2 save
+
+          # Fail if not online
+          $pm2 = pm2 jlist | ConvertFrom-Json
+          $app = $pm2 | Where-Object { $_.name -eq "cajasmart" }
+          if ($null -eq $app -or $app.pm2_env.status -ne "online") {
+            pm2 list
+            throw "PM2 failed to start cajasmart"
+          }
