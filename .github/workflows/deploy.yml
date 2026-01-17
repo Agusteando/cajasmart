@@ -10,28 +10,25 @@ jobs:
 
     defaults:
       run:
-        shell: powershell
+        shell: cmd
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: "18"
 
       - name: Retrieve .env from Live Site
         run: |
-          $PROD_ENV = "C:\Server\htdocs\cajasmart\.env"
-          if (Test-Path $PROD_ENV) {
-            Copy-Item -Path $PROD_ENV -Destination ".\.env" -Force
-          }
+          if exist C:\Server\htdocs\cajasmart\.env (
+            copy /Y C:\Server\htdocs\cajasmart\.env .env
+          )
 
       - name: Clean install state
         run: |
-          if (Test-Path node_modules) { Remove-Item -Recurse -Force node_modules }
-          if (Test-Path package-lock.json) { Remove-Item -Force package-lock.json }
+          if exist node_modules rmdir /s /q node_modules
+          if exist package-lock.json del package-lock.json
 
       - name: Install dependencies (no scripts)
         run: npm install --ignore-scripts
@@ -42,25 +39,19 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Deploy to Production Folder
+      - name: Deploy
         run: |
-          $TARGET = "C:\Server\htdocs\cajasmart"
+          set TARGET=C:\Server\htdocs\cajasmart
 
-          if (!(Test-Path $TARGET)) {
-            New-Item -ItemType Directory -Force -Path $TARGET | Out-Null
-          }
+          if not exist %TARGET% mkdir %TARGET%
 
-          try { pm2 stop cajasmart } catch {}
+          pm2 stop cajasmart || echo not running
 
-          Copy-Item -Path ".\*" -Destination $TARGET -Recurse -Force -Exclude ".git","node_modules"
+          xcopy . %TARGET% /E /I /Y /EXCLUDE:.git,node_modules
 
-          Set-Location $TARGET
+          cd /d %TARGET%
 
-          if (Test-Path node_modules) { Remove-Item -Recurse -Force node_modules }
+          if exist node_modules rmdir /s /q node_modules
           npm install --omit=dev --ignore-scripts
 
-          try {
-            pm2 restart cajasmart --update-env
-          } catch {
-            pm2 start process.yml
-          }
+          pm2 restart cajasmart || pm2 start process.yml
