@@ -1,7 +1,6 @@
 export default defineNuxtConfig({
   modules: ['@nuxtjs/tailwindcss', '@pinia/nuxt'],
-  
-  // This enables the use of HeroIcons in the sidebar
+
   build: {
     transpile: ['@heroicons/vue']
   },
@@ -12,14 +11,14 @@ export default defineNuxtConfig({
     dbUser: process.env.DB_USER,
     dbPass: process.env.DB_PASSWORD,
     dbName: process.env.DB_NAME,
-    
+
+    // (These can stay; auth endpoints below will read from process.env directly)
     googleClientId: process.env.GOOGLE_CLIENT_ID,
     googleClientSecret: process.env.GOOGLE_CLIENT_SECRET,
     baseUrl: process.env.BASE_URL,
-    
+
     uploadDir: process.env.UPLOAD_DIR || './public/uploads',
 
-    // Public keys (Client-side)
     public: {
       appName: 'CajaSmart IECS-IEDIS'
     }
@@ -34,4 +33,4 @@ export default defineNuxtConfig({
       ]
     }
   }
-})
+});

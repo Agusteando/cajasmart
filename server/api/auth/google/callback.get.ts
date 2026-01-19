@@ -1,12 +1,10 @@
+import { H3Event, getRequestURL } from 'h3';
 // Auto-imports: useDb from server/utils/db.ts
-import { H3Event } from 'h3';
 
 export default defineEventHandler(async (event: H3Event) => {
-  const config = useRuntimeConfig();
   const query = getQuery(event);
   const code = query.code;
 
-  // Helper for Native Redirects
   const redirect = (url: string) => {
     event.node.res.writeHead(302, { Location: url });
     event.node.res.end();
@@ -14,33 +12,42 @@ export default defineEventHandler(async (event: H3Event) => {
 
   if (!code) return redirect('/login?error=no_code');
 
+  const googleClientId = process.env.GOOGLE_CLIENT_ID || '';
+  const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET || '';
+  const baseUrl = process.env.BASE_URL || getRequestURL(event).origin;
+
+  if (!googleClientId || !googleClientSecret) {
+    return redirect('/login?error=server_error');
+  }
+
   try {
-    // 1. Swap Code for Access Token
+    // 1) Swap Code for Access Token (x-www-form-urlencoded required)
     const tokenResponse: any = await $fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
-      body: {
-        code,
-        client_id: config.googleClientId,
-        client_secret: config.googleClientSecret,
-        redirect_uri: `${config.baseUrl}/api/auth/google/callback`,
-        grant_type: 'authorization_code',
-      },
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code: String(code),
+        client_id: googleClientId,
+        client_secret: googleClientSecret,
+        redirect_uri: `${baseUrl}/api/auth/google/callback`,
+        grant_type: 'authorization_code'
+      }).toString()
     });
 
-    // 2. Get User Profile
+    // 2) Get User Profile
     const googleUser: any = await $fetch('https://www.googleapis.com/oauth2/v1/userinfo', {
-      headers: { Authorization: `Bearer ${tokenResponse.access_token}` },
+      headers: { Authorization: `Bearer ${tokenResponse.access_token}` }
     });
 
-    // 3. Connect to DB
+    // 3) Connect to DB
     const db = await useDb();
 
-    // 4. Check User Existence
+    // 4) Check User Existence
     let [rows]: any = await db.execute(
-      `SELECT u.*, p.nombre as plantel_nombre, r.nombre as role_name, r.nivel_permiso 
-       FROM users u 
-       LEFT JOIN planteles p ON u.plantel_id = p.id 
-       JOIN roles r ON u.role_id = r.id 
+      `SELECT u.*, p.nombre as plantel_nombre, r.nombre as role_name, r.nivel_permiso
+       FROM users u
+       LEFT JOIN planteles p ON u.plantel_id = p.id
+       JOIN roles r ON u.role_id = r.id
        WHERE u.email = ?`,
       [googleUser.email]
     );
@@ -48,43 +55,41 @@ export default defineEventHandler(async (event: H3Event) => {
     let user = rows[0];
 
     // ==========================================
-    //  AUTO-REGISTRATION (CasitaIEDIS Logic)
+    // AUTO-REGISTRATION (CasitaIEDIS Logic)
     // ==========================================
     if (!user) {
-      const email = googleUser.email.toLowerCase();
+      const email = String(googleUser.email).toLowerCase();
       const domain = email.split('@')[1];
-      
-      // Allow specific domains (Added gmail for your testing)
+
       const allowedDomains = ['casitaiedis.edu.mx', 'iedis.edu.mx', 'gmail.com'];
 
       if (allowedDomains.includes(domain)) {
-        // Get Default Role (ID 2 = Admin Plantel / Level 1)
-        // Ensure this role exists in your DB!
-        const [roles]: any = await db.execute("SELECT id FROM roles WHERE nivel_permiso = 1 LIMIT 1");
+        const [roles]: any = await db.execute(
+          'SELECT id FROM roles WHERE nivel_permiso = 1 LIMIT 1'
+        );
         const defaultRoleId = roles.length > 0 ? roles[0].id : 2;
 
-        // Create User
         const [result]: any = await db.execute(
-          `INSERT INTO users (nombre, email, google_id, avatar_url, role_id, activo) 
+          `INSERT INTO users (nombre, email, google_id, avatar_url, role_id, activo)
            VALUES (?, ?, ?, ?, ?, 1)`,
           [googleUser.name, email, googleUser.id, googleUser.picture, defaultRoleId]
         );
 
-        // Fetch new user data
         const [newUserRows]: any = await db.execute(
-          `SELECT u.*, p.nombre as plantel_nombre, r.nombre as role_name, r.nivel_permiso 
-           FROM users u 
-           LEFT JOIN planteles p ON u.plantel_id = p.id 
-           JOIN roles r ON u.role_id = r.id 
+          `SELECT u.*, p.nombre as plantel_nombre, r.nombre as role_name, r.nivel_permiso
+           FROM users u
+           LEFT JOIN planteles p ON u.plantel_id = p.id
+           JOIN roles r ON u.role_id = r.id
            WHERE u.id = ?`,
           [result.insertId]
         );
+
         user = newUserRows[0];
       } else {
+        await db.end();
         return redirect('/login?error=unauthorized_domain');
       }
     } else {
-      // Update existing user avatar
       await db.execute('UPDATE users SET google_id = ?, avatar_url = ? WHERE id = ?', [
         googleUser.id,
         googleUser.picture,
@@ -92,7 +97,7 @@ export default defineEventHandler(async (event: H3Event) => {
       ]);
     }
 
-    // 5. Create Session Cookie
+    // 5) Create Session Cookie
     const sessionUser = {
       id: user.id,
       nombre: user.nombre,
@@ -107,13 +112,14 @@ export default defineEventHandler(async (event: H3Event) => {
     setCookie(event, 'user', JSON.stringify(sessionUser), {
       httpOnly: false,
       secure: process.env.NODE_ENV === 'production',
-      maxAge: 60 * 60 * 24 * 7, // 7 days
+      maxAge: 60 * 60 * 24 * 7,
       path: '/'
     });
 
-    // 6. Native Redirect to Dashboard
-    return redirect('/');
+    await db.end();
 
+    // 6) Redirect to Dashboard
+    return redirect('/');
   } catch (error) {
     console.error('Login Error:', error);
     return redirect('/login?error=server_error');
