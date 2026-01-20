@@ -15,13 +15,14 @@ export default defineEventHandler((event) => {
   const baseUrl = getPublicOrigin(event);
   const redirectUri = `${baseUrl}/api/auth/google/callback`;
 
-  console.log('[google:index] redirectUri =', redirectUri);
+  console.log('[google:index] baseUrl=', baseUrl);
+  console.log('[google:index] redirectUri=', redirectUri);
 
   const qs = new URLSearchParams({
-    client_id: googleClientId,
     redirect_uri: redirectUri,
-    response_type: 'code',
+    client_id: googleClientId,
     access_type: 'offline',
+    response_type: 'code',
     prompt: 'consent',
     scope: [
       'https://www.googleapis.com/auth/userinfo.profile',
@@ -29,11 +30,9 @@ export default defineEventHandler((event) => {
     ].join(' ')
   }).toString();
 
-  const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${qs}`;
+  const fullUrl = `https://accounts.google.com/o/oauth2/v2/auth?${qs}`;
 
-  // HTML redirect avoids IIS Location header issues
+  // HTML redirect to avoid IIS/ARR rewriting Location headers
   event.node.res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  event.node.res.end(
-    `<!doctype html><script>location.replace(${JSON.stringify(authUrl)})</script>`
-  );
+  event.node.res.end(`<!doctype html><script>location.replace(${JSON.stringify(fullUrl)})</script>`);
 });

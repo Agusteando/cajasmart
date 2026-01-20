@@ -20,7 +20,7 @@ export default defineEventHandler(async (event: H3Event) => {
   const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET;
 
   if (!googleClientId || !googleClientSecret) {
-    console.error('[google:callback] Google env missing', {
+    console.error('[google:callback] missing env', {
       hasId: !!googleClientId,
       hasSecret: !!googleClientSecret
     });
@@ -31,11 +31,9 @@ export default defineEventHandler(async (event: H3Event) => {
 
   const baseUrl = getPublicOrigin(event);
   const redirectUri = `${baseUrl}/api/auth/google/callback`;
-
-  console.log('[google:callback] redirectUri =', redirectUri);
+  console.log('[google:callback] redirectUri=', redirectUri);
 
   try {
-    // 1) Exchange code for token
     const token: any = await $fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
       body: new URLSearchParams({
@@ -49,15 +47,11 @@ export default defineEventHandler(async (event: H3Event) => {
 
     console.log('[google:callback] token ok');
 
-    // 2) Fetch profile
-    const googleUser: any = await $fetch(
-      'https://www.googleapis.com/oauth2/v3/userinfo',
-      {
-        headers: { Authorization: `Bearer ${token.access_token}` }
-      }
-    );
+    const googleUser: any = await $fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+      headers: { Authorization: `Bearer ${token.access_token}` }
+    });
 
-    console.log('[google:callback] user =', googleUser.email);
+    console.log('[google:callback] email=', googleUser?.email);
 
     const db = await useDb();
 
@@ -72,33 +66,27 @@ export default defineEventHandler(async (event: H3Event) => {
 
     let user = rows[0];
 
-    // Auto-register
     if (!user) {
-      const domain = googleUser.email.split('@')[1];
-      const allowed = ['casitaiedis.edu.mx', 'iedis.edu.mx', 'gmail.com'];
+      const email = String(googleUser.email).toLowerCase();
+      const domain = email.split('@')[1] || '';
+      const allowedDomains = ['casitaiedis.edu.mx', 'iedis.edu.mx', 'gmail.com'];
 
-      if (!allowed.includes(domain)) {
-        console.warn('[google:callback] blocked domain', domain);
+      if (!allowedDomains.includes(domain)) {
+        console.warn('[google:callback] unauthorized domain=', domain);
         event.node.res.writeHead(302, { Location: '/login?error=unauthorized_domain' });
         event.node.res.end();
         return;
       }
 
-      const [roles]: any = await db.execute(
-        'SELECT id FROM roles WHERE nivel_permiso = 1 LIMIT 1'
-      );
-      const roleId = roles?.[0]?.id ?? 2;
+      const [roles]: any = await db.execute('SELECT id FROM roles WHERE nivel_permiso = 1 LIMIT 1');
+      const defaultRoleId = roles?.[0]?.id ?? 2;
+
+      const googleId = googleUser.sub || googleUser.id;
 
       const [res]: any = await db.execute(
         `INSERT INTO users (nombre, email, google_id, avatar_url, role_id, activo)
          VALUES (?, ?, ?, ?, ?, 1)`,
-        [
-          googleUser.name,
-          googleUser.email,
-          googleUser.sub,
-          googleUser.picture,
-          roleId
-        ]
+        [googleUser.name, email, googleId, googleUser.picture, defaultRoleId]
       );
 
       const [newRows]: any = await db.execute(
@@ -111,18 +99,21 @@ export default defineEventHandler(async (event: H3Event) => {
       );
 
       user = newRows[0];
-      console.log('[google:callback] user created', user.id);
+      console.log('[google:callback] created user id=', user.id);
     } else {
-      await db.execute(
-        'UPDATE users SET google_id = ?, avatar_url = ? WHERE id = ?',
-        [googleUser.sub, googleUser.picture, user.id]
-      );
-      console.log('[google:callback] user updated', user.id);
+      const googleId = googleUser.sub || googleUser.id;
+      await db.execute('UPDATE users SET google_id = ?, avatar_url = ? WHERE id = ?', [
+        googleId,
+        googleUser.picture,
+        user.id
+      ]);
+      console.log('[google:callback] updated user id=', user.id);
     }
 
     const isHttps =
       baseUrl.startsWith('https://') ||
-      Boolean(getRequestHeader(event, 'x-arr-ssl'));
+      Boolean(getRequestHeader(event, 'x-arr-ssl')) ||
+      String(getRequestHeader(event, 'x-forwarded-proto') || '').startsWith('https');
 
     const sessionUser = {
       id: user.id,
