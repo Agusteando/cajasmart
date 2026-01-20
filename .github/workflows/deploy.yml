@@ -90,10 +90,18 @@ jobs:
           pm2 start process.yml
           pm2 save
 
-          # Fail if not online
-          $pm2 = pm2 jlist | ConvertFrom-Json
-          $app = $pm2 | Where-Object { $_.name -eq "cajasmart" }
-          if ($null -eq $app -or $app.pm2_env.status -ne "online") {
+          # Fail if not online (use Node JSON.parse to avoid PowerShell duplicate-key failure)
+          $status = node -e @"
+          const { execSync } = require('child_process');
+          const list = JSON.parse(execSync('pm2 jlist', { stdio: ['ignore','pipe','pipe'] }).toString());
+          const app = list.find(p => p && p.name === 'cajasmart');
+          if (!app) process.exit(10);
+          if (!app.pm2_env || app.pm2_env.status !== 'online') process.exit(11);
+          "@
+
+          if ($LASTEXITCODE -ne 0) {
             pm2 list
-            throw "PM2 failed to start cajasmart"
+            if ($LASTEXITCODE -eq 10) { throw "PM2 did not create/find process 'cajasmart' after start" }
+            if ($LASTEXITCODE -eq 11) { throw "PM2 started 'cajasmart' but it is not online" }
+            throw "PM2 health check failed with exit code $LASTEXITCODE"
           }
