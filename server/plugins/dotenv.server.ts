@@ -1,9 +1,8 @@
 import 'dotenv/config';
 
 export default defineNitroPlugin(() => {
-  // No secrets printed. This tells you if .env is being read at runtime and from what cwd.
+  // Minimal runtime proof (no secrets)
   console.log('[env] cwd=', process.cwd());
-  console.log('[env] has GOOGLE_CLIENT_ID=', !!process.env.GOOGLE_CLIENT_ID);
-  console.log('[env] has GOOGLE_CLIENT_SECRET=', !!process.env.GOOGLE_CLIENT_SECRET);
-  console.log('[env] has BASE_URL=', !!process.env.BASE_URL);
+  console.log('[env] GOOGLE_CLIENT_ID present=', !!process.env.GOOGLE_CLIENT_ID);
+  console.log('[env] GOOGLE_CLIENT_SECRET present=', !!process.env.GOOGLE_CLIENT_SECRET);
 });
