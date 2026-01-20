@@ -6,16 +6,11 @@ export default defineNuxtConfig({
   },
 
   runtimeConfig: {
-    // Private keys (Server-side only)
+    // DB stays here (fine)
     dbHost: process.env.DB_HOST,
     dbUser: process.env.DB_USER,
     dbPass: process.env.DB_PASSWORD,
     dbName: process.env.DB_NAME,
-
-    // (These can stay; auth endpoints below will read from process.env directly)
-    googleClientId: process.env.GOOGLE_CLIENT_ID,
-    googleClientSecret: process.env.GOOGLE_CLIENT_SECRET,
-    baseUrl: process.env.BASE_URL,
 
     uploadDir: process.env.UPLOAD_DIR || './public/uploads',
 

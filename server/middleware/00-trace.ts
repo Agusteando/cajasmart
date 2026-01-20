@@ -1,30 +1,44 @@
 import { getRequestURL } from 'h3';
-import { log, logHeaders } from '~/server/utils/log';
+import { log, logHeaders, getReqId } from '~/server/utils/log';
 
-export default defineEventHandler(async (event) => {
-  const url = getRequestURL(event);
-  const path = url.pathname;
+export default defineNitroPlugin((nitroApp) => {
+  nitroApp.hooks.hook('request', (event) => {
+    const url = getRequestURL(event);
+    const path = url.pathname;
 
-  // Skip noisy assets
-  if (
-    path.startsWith('/_nuxt/') ||
-    path === '/favicon.ico' ||
-    path === '/robots.txt' ||
-    path.startsWith('/uploads/')
-  ) {
-    return;
-  }
+    if (
+      path.startsWith('/_nuxt/') ||
+      path === '/favicon.ico' ||
+      path === '/robots.txt' ||
+      path.startsWith('/uploads/')
+    ) return;
 
-  const start = Date.now();
-  log(event, 'INFO', 'request:start');
-  logHeaders(event);
+    (event.context as any)._t0 = Date.now();
+    getReqId(event);
+    log(event, 'INFO', 'request:start');
+    logHeaders(event);
+  });
 
-  try {
-    // let the next handler run
-    await event.$fetch?.();
-  } catch {
-    // ignore, error handler will log
-  } finally {
-    log(event, 'INFO', 'request:end', { ms: Date.now() - start });
-  }
+  nitroApp.hooks.hook('afterResponse', (event) => {
+    const url = getRequestURL(event);
+    const path = url.pathname;
+
+    if (
+      path.startsWith('/_nuxt/') ||
+      path === '/favicon.ico' ||
+      path === '/robots.txt' ||
+      path.startsWith('/uploads/')
+    ) return;
+
+    const t0 = (event.context as any)._t0 || Date.now();
+    log(event, 'INFO', 'request:end', { ms: Date.now() - t0 });
+  });
+
+  nitroApp.hooks.hook('error', (error, event) => {
+    if (!event) return;
+    log(event, 'ERROR', 'nitro:error', {
+      message: (error as any)?.message,
+      stack: (error as any)?.stack
+    });
+  });
 });

@@ -1,15 +1,12 @@
 import { getPublicOrigin } from '~/server/utils/publicOrigin';
-import { log, logEnvSnapshot } from '~/server/utils/log';
 
 export default defineEventHandler((event) => {
-  log(event, 'INFO', 'google:index:hit');
-  logEnvSnapshot(event);
+  console.log('[google:index] hit');
 
-  const config = useRuntimeConfig();
-  const googleClientId = (config.googleClientId || process.env.GOOGLE_CLIENT_ID || '').toString().trim();
+  const googleClientId = process.env.GOOGLE_CLIENT_ID;
 
   if (!googleClientId) {
-    log(event, 'ERROR', 'google:index:missing_client_id');
+    console.error('[google:index] GOOGLE_CLIENT_ID missing');
     event.node.res.writeHead(302, { Location: '/login?error=server_error' });
     event.node.res.end();
     return;
@@ -18,16 +15,13 @@ export default defineEventHandler((event) => {
   const baseUrl = getPublicOrigin(event);
   const redirectUri = `${baseUrl}/api/auth/google/callback`;
 
-  log(event, 'DEBUG', 'google:index:computed', {
-    baseUrl,
-    redirectUri
-  });
+  console.log('[google:index] redirectUri =', redirectUri);
 
   const qs = new URLSearchParams({
-    redirect_uri: redirectUri,
     client_id: googleClientId,
-    access_type: 'offline',
+    redirect_uri: redirectUri,
     response_type: 'code',
+    access_type: 'offline',
     prompt: 'consent',
     scope: [
       'https://www.googleapis.com/auth/userinfo.profile',
@@ -35,9 +29,11 @@ export default defineEventHandler((event) => {
     ].join(' ')
   }).toString();
 
-  const fullUrl = `https://accounts.google.com/o/oauth2/v2/auth?${qs}`;
+  const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${qs}`;
 
-  // Avoid IIS/ARR rewriting Location
+  // HTML redirect avoids IIS Location header issues
   event.node.res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  event.node.res.end(`<!doctype html><script>location.replace(${JSON.stringify(fullUrl)})</script>`);
+  event.node.res.end(
+    `<!doctype html><script>location.replace(${JSON.stringify(authUrl)})</script>`
+  );
 });
