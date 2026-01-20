@@ -6,3 +6,6 @@ apps:
     env:
       NODE_ENV: production
       PORT: 15776
+      NITRO_LOG_LEVEL: debug
+    merge_logs: true
+    time: true

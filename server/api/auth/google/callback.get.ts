@@ -1,103 +1,146 @@
-import { H3Event, getRequestURL } from 'h3';
-// Auto-imports: useDb from server/utils/db.ts
+import type { H3Event } from 'h3';
+import { getRequestHeader } from 'h3';
+import { getPublicOrigin } from '~/server/utils/publicOrigin';
+import { useDb } from '~/server/utils/db';
+import { log, logEnvSnapshot } from '~/server/utils/log';
 
 export default defineEventHandler(async (event: H3Event) => {
+  log(event, 'INFO', 'google:callback:hit');
+  logEnvSnapshot(event);
+
   const query = getQuery(event);
-  const code = query.code;
+  const code = query.code ? String(query.code) : '';
 
-  const redirect = (url: string) => {
-    event.node.res.writeHead(302, { Location: url });
+  if (!code) {
+    log(event, 'WARN', 'google:callback:no_code', { query });
+    event.node.res.writeHead(302, { Location: '/login?error=no_code' });
     event.node.res.end();
-  };
-
-  if (!code) return redirect('/login?error=no_code');
-
-  const googleClientId = process.env.GOOGLE_CLIENT_ID || '';
-  const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET || '';
-  const baseUrl = process.env.BASE_URL || getRequestURL(event).origin;
-
-  if (!googleClientId || !googleClientSecret) {
-    return redirect('/login?error=server_error');
+    return;
   }
 
+  const config = useRuntimeConfig();
+  const googleClientId = (config.googleClientId || process.env.GOOGLE_CLIENT_ID || '').toString().trim();
+  const googleClientSecret = (config.googleClientSecret || process.env.GOOGLE_CLIENT_SECRET || '').toString().trim();
+
+  if (!googleClientId || !googleClientSecret) {
+    log(event, 'ERROR', 'google:callback:missing_google_env', {
+      hasClientId: !!googleClientId,
+      hasClientSecret: !!googleClientSecret
+    });
+    event.node.res.writeHead(302, { Location: '/login?error=server_error' });
+    event.node.res.end();
+    return;
+  }
+
+  const baseUrl = getPublicOrigin(event);
+  const redirectUri = `${baseUrl}/api/auth/google/callback`;
+
+  const xfProto = String(getRequestHeader(event, 'x-forwarded-proto') || '');
+  const arrSsl = Boolean(getRequestHeader(event, 'x-arr-ssl'));
+
+  log(event, 'DEBUG', 'google:callback:computed', {
+    baseUrl,
+    redirectUri,
+    xfProto,
+    arrSsl
+  });
+
   try {
-    // 1) Swap Code for Access Token (x-www-form-urlencoded required)
+    // 1) token exchange
+    log(event, 'DEBUG', 'google:token:request', { redirectUri });
+
     const tokenResponse: any = await $fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
-        code: String(code),
+        code,
         client_id: googleClientId,
         client_secret: googleClientSecret,
-        redirect_uri: `${baseUrl}/api/auth/google/callback`,
+        redirect_uri: redirectUri,
         grant_type: 'authorization_code'
-      }).toString()
+      })
     });
 
-    // 2) Get User Profile
-    const googleUser: any = await $fetch('https://www.googleapis.com/oauth2/v1/userinfo', {
+    log(event, 'DEBUG', 'google:token:response', {
+      keys: Object.keys(tokenResponse || {}),
+      hasAccessToken: !!tokenResponse?.access_token,
+      tokenType: tokenResponse?.token_type || null,
+      expiresIn: tokenResponse?.expires_in || null
+    });
+
+    // 2) profile
+    const googleUser: any = await $fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
       headers: { Authorization: `Bearer ${tokenResponse.access_token}` }
     });
 
-    // 3) Connect to DB
+    const email = String(googleUser?.email || '');
+    const domain = email.includes('@') ? email.split('@')[1] : '';
+
+    log(event, 'DEBUG', 'google:userinfo', {
+      hasEmail: !!email,
+      domain,
+      subPresent: !!googleUser?.sub,
+      picturePresent: !!googleUser?.picture
+    });
+
+    // 3) DB lookup / create
     const db = await useDb();
 
-    // 4) Check User Existence
-    let [rows]: any = await db.execute(
+    const [rows]: any = await db.execute(
       `SELECT u.*, p.nombre as plantel_nombre, r.nombre as role_name, r.nivel_permiso
        FROM users u
        LEFT JOIN planteles p ON u.plantel_id = p.id
        JOIN roles r ON u.role_id = r.id
        WHERE u.email = ?`,
-      [googleUser.email]
+      [email]
     );
 
     let user = rows[0];
+    log(event, 'DEBUG', 'db:user:lookup', { found: !!user });
 
-    // ==========================================
-    // AUTO-REGISTRATION (CasitaIEDIS Logic)
-    // ==========================================
     if (!user) {
-      const email = String(googleUser.email).toLowerCase();
-      const domain = email.split('@')[1];
-
       const allowedDomains = ['casitaiedis.edu.mx', 'iedis.edu.mx', 'gmail.com'];
-
-      if (allowedDomains.includes(domain)) {
-        const [roles]: any = await db.execute(
-          'SELECT id FROM roles WHERE nivel_permiso = 1 LIMIT 1'
-        );
-        const defaultRoleId = roles.length > 0 ? roles[0].id : 2;
-
-        const [result]: any = await db.execute(
-          `INSERT INTO users (nombre, email, google_id, avatar_url, role_id, activo)
-           VALUES (?, ?, ?, ?, ?, 1)`,
-          [googleUser.name, email, googleUser.id, googleUser.picture, defaultRoleId]
-        );
-
-        const [newUserRows]: any = await db.execute(
-          `SELECT u.*, p.nombre as plantel_nombre, r.nombre as role_name, r.nivel_permiso
-           FROM users u
-           LEFT JOIN planteles p ON u.plantel_id = p.id
-           JOIN roles r ON u.role_id = r.id
-           WHERE u.id = ?`,
-          [result.insertId]
-        );
-
-        user = newUserRows[0];
-      } else {
-        await db.end();
-        return redirect('/login?error=unauthorized_domain');
+      if (!allowedDomains.includes(domain)) {
+        log(event, 'WARN', 'db:user:blocked_domain', { domain });
+        event.node.res.writeHead(302, { Location: '/login?error=unauthorized_domain' });
+        event.node.res.end();
+        return;
       }
+
+      const [roles]: any = await db.execute('SELECT id FROM roles WHERE nivel_permiso = 1 LIMIT 1');
+      const defaultRoleId = roles?.[0]?.id ?? 2;
+
+      const [result]: any = await db.execute(
+        `INSERT INTO users (nombre, email, google_id, avatar_url, role_id, activo)
+         VALUES (?, ?, ?, ?, ?, 1)`,
+        [googleUser.name, email, googleUser.sub || googleUser.id, googleUser.picture, defaultRoleId]
+      );
+
+      log(event, 'INFO', 'db:user:created', { id: result.insertId });
+
+      const [newUserRows]: any = await db.execute(
+        `SELECT u.*, p.nombre as plantel_nombre, r.nombre as role_name, r.nivel_permiso
+         FROM users u
+         LEFT JOIN planteles p ON u.plantel_id = p.id
+         JOIN roles r ON u.role_id = r.id
+         WHERE u.id = ?`,
+        [result.insertId]
+      );
+
+      user = newUserRows[0];
     } else {
       await db.execute('UPDATE users SET google_id = ?, avatar_url = ? WHERE id = ?', [
-        googleUser.id,
+        googleUser.sub || googleUser.id,
         googleUser.picture,
         user.id
       ]);
+      log(event, 'INFO', 'db:user:updated', { id: user.id });
     }
 
-    // 5) Create Session Cookie
+    const isHttps =
+      baseUrl.startsWith('https://') ||
+      Boolean(getRequestHeader(event, 'x-arr-ssl')) ||
+      String(getRequestHeader(event, 'x-forwarded-proto') || '').startsWith('https');
+
     const sessionUser = {
       id: user.id,
       nombre: user.nombre,
@@ -111,17 +154,25 @@ export default defineEventHandler(async (event: H3Event) => {
 
     setCookie(event, 'user', JSON.stringify(sessionUser), {
       httpOnly: false,
-      secure: process.env.NODE_ENV === 'production',
+      secure: isHttps,
+      sameSite: 'lax',
       maxAge: 60 * 60 * 24 * 7,
       path: '/'
     });
 
-    await db.end();
+    log(event, 'INFO', 'google:callback:success', { userId: user.id });
 
-    // 6) Redirect to Dashboard
-    return redirect('/');
-  } catch (error) {
-    console.error('Login Error:', error);
-    return redirect('/login?error=server_error');
+    event.node.res.writeHead(302, { Location: '/' });
+    event.node.res.end();
+  } catch (err: any) {
+    // ofetch errors often expose: statusCode, data
+    log(event, 'ERROR', 'google:callback:failed', {
+      message: err?.message,
+      statusCode: err?.statusCode || err?.status,
+      data: err?.data ? { ...err.data, access_token: undefined, refresh_token: undefined } : undefined
+    });
+
+    event.node.res.writeHead(302, { Location: '/login?error=server_error' });
+    event.node.res.end();
   }
 });
