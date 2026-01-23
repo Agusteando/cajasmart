@@ -1,16 +1,15 @@
 import { config as loadDotenv } from 'dotenv';
 import { existsSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 let _loaded = false;
 let _loadedFrom: string[] = [];
-let _searched: string[] = [];
 
 export function normalizeEnvValue(v: unknown): string {
   let s = String(v ?? '').trim();
 
-  // strip wrapping quotes if present
+  // Strip wrapping quotes: GOOGLE_CLIENT_ID="..." or '...'
   if (
     (s.startsWith('"') && s.endsWith('"') && s.length >= 2) ||
     (s.startsWith("'") && s.endsWith("'") && s.length >= 2)
@@ -27,49 +26,91 @@ export function maskMid(value: string, head = 6, tail = 6) {
   return `${s.slice(0, head)}***${s.slice(-tail)}`;
 }
 
-function buildCandidates(): string[] {
-  const candidates: string[] = [];
+/**
+ * Convert user-provided DOTENV_PATH into an absolute filesystem path.
+ * Supports:
+ *  - absolute/relative paths
+ *  - file: URLs (even relative ones like file:.env) by resolving against cwd
+ */
+function toFsPath(input: string, cwd: string) {
+  const s = normalizeEnvValue(input);
+  if (!s) return '';
 
-  // 1) Explicit override
-  const dotenvPath = normalizeEnvValue(process.env.DOTENV_PATH);
-  if (dotenvPath) candidates.push(resolve(dotenvPath));
-
-  // 2) From current working directory
-  const cwd = process.cwd();
-  for (const name of ['.env', '.env.local', '.env.production', '.env.production.local']) {
-    candidates.push(resolve(cwd, name));
+  // file: URL support (and fix for "File URL path must be absolute")
+  if (s.startsWith('file:')) {
+    const base = pathToFileURL(cwd.endsWith(path.sep) ? cwd : cwd + path.sep);
+    const url = new URL(s, base); // makes it absolute
+    return fileURLToPath(url);
   }
 
-  // 3) From this file location (works even when running from .output/server)
-  // Walk up several parents, looking for .env files
-  const here = dirname(fileURLToPath(import.meta.url));
-  for (let i = 0; i <= 6; i++) {
-    const up = resolve(here, ...Array(i).fill('..'));
-    for (const name of ['.env', '.env.local', '.env.production', '.env.production.local']) {
-      candidates.push(resolve(up, name));
-    }
-  }
+  return path.isAbsolute(s) ? s : path.resolve(cwd, s);
+}
+
+function candidateDirs(cwd: string) {
+  const dirs = [cwd];
+
+  // If running from ".output/server" somehow, also check project root
+  const norm = cwd.replace(/\\/g, '/');
+  if (norm.endsWith('/.output/server')) dirs.push(path.resolve(cwd, '..', '..'));
+  if (norm.endsWith('/.output')) dirs.push(path.resolve(cwd, '..'));
 
   // de-dupe
-  return Array.from(new Set(candidates));
+  return Array.from(new Set(dirs));
+}
+
+function buildCandidates(cwd: string) {
+  const dirs = candidateDirs(cwd);
+
+  const names = ['.env', '.env.local', '.env.production', '.env.production.local'];
+
+  const candidates: string[] = [];
+
+  // optional explicit override
+  const raw = normalizeEnvValue(process.env.DOTENV_PATH);
+  if (raw) candidates.push(toFsPath(raw, cwd));
+
+  // common dotenv files in cwd / parent candidates
+  for (const dir of dirs) {
+    for (const n of names) candidates.push(path.resolve(dir, n));
+  }
+
+  // de-dupe + keep only absolute filesystem paths
+  return Array.from(new Set(candidates)).filter((p) => !!p && path.isAbsolute(p));
 }
 
 export function ensureEnvLoaded() {
-  if (_loaded) return { loaded: _loaded, loadedFrom: _loadedFrom, searched: _searched };
+  if (_loaded) return { loaded: _loaded, loadedFrom: _loadedFrom };
 
-  const candidates = buildCandidates();
-  _searched = candidates;
+  const cwd = process.cwd();
   _loadedFrom = [];
 
-  for (const p of candidates) {
-    if (existsSync(p)) {
-      loadDotenv({ path: p, override: false });
-      _loadedFrom.push(p);
+  try {
+    const candidates = buildCandidates(cwd);
+
+    for (const p of candidates) {
+      if (existsSync(p)) {
+        loadDotenv({ path: p, override: false });
+        _loadedFrom.push(p);
+      }
     }
+  } catch (err: any) {
+    // HARD GUARD: never crash Nitro on env loading
+    console.error(
+      JSON.stringify({
+        t: new Date().toISOString(),
+        level: 'ERROR',
+        msg: 'dotenv:load:failed',
+        data: {
+          message: err?.message,
+          code: err?.code,
+          cwd
+        }
+      })
+    );
   }
 
   _loaded = true;
-  return { loaded: _loaded, loadedFrom: _loadedFrom, searched: _searched };
+  return { loaded: _loaded, loadedFrom: _loadedFrom };
 }
 
 export function envDebugSnapshot() {
@@ -79,8 +120,6 @@ export function envDebugSnapshot() {
   return {
     cwd: process.cwd(),
     loadedFrom: _loadedFrom,
-    searchedCount: _searched.length,
-    searchedPreview: _searched.slice(0, 8), // keep logs short
     GOOGLE_CLIENT_ID_present: !!id,
     GOOGLE_CLIENT_SECRET_present: !!secret,
     GOOGLE_CLIENT_ID_masked: maskMid(id),
