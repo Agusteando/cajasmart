@@ -6,6 +6,9 @@ export default defineNuxtConfig({
   },
 
   runtimeConfig: {
+    // Prefer a stable public base URL in prod (important behind proxies)
+    baseUrl: process.env.BASE_URL,
+
     // DB (server only)
     dbHost: process.env.DB_HOST,
     dbUser: process.env.DB_USER,
