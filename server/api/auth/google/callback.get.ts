@@ -74,8 +74,13 @@ export default defineEventHandler(async (event: H3Event) => {
 
   const cfg = useRuntimeConfig() as any;
 
-  const clientId = normalizeEnvValue(cfg.googleClientId ?? process.env.GOOGLE_CLIENT_ID);
-  const clientSecret = normalizeEnvValue(cfg.googleClientSecret ?? process.env.GOOGLE_CLIENT_SECRET);
+  const cfgId = normalizeEnvValue(cfg.googleClientId);
+  const envId = normalizeEnvValue(process.env.GOOGLE_CLIENT_ID);
+  const clientId = cfgId || envId;
+
+  const cfgSecret = normalizeEnvValue(cfg.googleClientSecret);
+  const envSecret = normalizeEnvValue(process.env.GOOGLE_CLIENT_SECRET);
+  const clientSecret = cfgSecret || envSecret;
 
   const baseUrl = getPublicOrigin(event);
   const redirectUri = `${baseUrl}/api/auth/google/callback`;
@@ -83,8 +88,10 @@ export default defineEventHandler(async (event: H3Event) => {
   logStep(event, 'callback:computed', {
     baseUrl,
     redirectUri,
-    clientId: maskMid(clientId),
-    clientSecret: clientSecret ? `***${clientSecret.slice(-6)}` : '',
+    clientId: clientId ? maskMid(clientId) : null,
+    clientIdFrom: cfgId ? 'runtimeConfig' : (envId ? 'process.env' : 'none'),
+    clientSecret: clientSecret ? `***${clientSecret.slice(-6)}` : null,
+    secretFrom: cfgSecret ? 'runtimeConfig' : (envSecret ? 'process.env' : 'none'),
     codeLen: code.length
   });
 
@@ -96,7 +103,6 @@ export default defineEventHandler(async (event: H3Event) => {
 
   let token: any;
 
-  // Attempt 1: credentials in body
   try {
     logStep(event, 'token:exchange:body:start');
     token = await exchangeTokenWithBody({ code, clientId, clientSecret, redirectUri });
@@ -111,10 +117,9 @@ export default defineEventHandler(async (event: H3Event) => {
     log(event, 'ERROR', 'token:exchange:body:failed', {
       ...e,
       clientId: maskMid(clientId),
-      clientSecret: clientSecret ? `***${clientSecret.slice(-6)}` : ''
+      clientSecret: `***${clientSecret.slice(-6)}`
     });
 
-    // If Google says invalid_client, try Basic auth as a fallback.
     if (e.status === 401 && googleErr === 'invalid_client') {
       try {
         logStep(event, 'token:exchange:basic:retry:start');
@@ -128,12 +133,11 @@ export default defineEventHandler(async (event: H3Event) => {
         log(event, 'ERROR', 'token:exchange:basic:retry:failed', {
           ...e2,
           hint:
-            'Google returned invalid_client. This almost always means the OAuth Client ID/Secret do not match. Verify you are using a "Web application" OAuth client and the current secret.'
+            'invalid_client => your client_id/client_secret pair is wrong (mismatched, rotated secret, wrong OAuth client).'
         });
         return htmlRedirect(event, '/login?error=oauth_client');
       }
     } else {
-      // other errors: redirect mismatch, invalid_grant, etc
       return htmlRedirect(event, '/login?error=server_error');
     }
   }

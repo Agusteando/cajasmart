@@ -9,7 +9,18 @@ export default defineEventHandler((event) => {
 
   const cfg = useRuntimeConfig() as any;
 
-  const googleClientId = normalizeEnvValue(cfg.googleClientId ?? process.env.GOOGLE_CLIENT_ID);
+  const cfgId = normalizeEnvValue(cfg.googleClientId);
+  const envId = normalizeEnvValue(process.env.GOOGLE_CLIENT_ID);
+
+  // IMPORTANT: use || (NOT ??) so empty string falls back to env
+  const googleClientId = cfgId || envId;
+
+  log(event, 'DEBUG', 'google:index clientId source', {
+    cfgId: cfgId ? maskMid(cfgId) : null,
+    envId: envId ? maskMid(envId) : null,
+    picked: googleClientId ? maskMid(googleClientId) : null,
+    pickedFrom: cfgId ? 'runtimeConfig' : (envId ? 'process.env' : 'none')
+  });
 
   if (!googleClientId) {
     log(event, 'ERROR', 'google:index missing GOOGLE_CLIENT_ID');
@@ -20,11 +31,7 @@ export default defineEventHandler((event) => {
   const baseUrl = getPublicOrigin(event);
   const redirectUri = `${baseUrl}/api/auth/google/callback`;
 
-  logStep(event, 'index:computed', {
-    baseUrl,
-    redirectUri,
-    clientId: maskMid(googleClientId)
-  });
+  logStep(event, 'index:computed', { baseUrl, redirectUri });
 
   const qs = new URLSearchParams({
     redirect_uri: redirectUri,
@@ -39,5 +46,6 @@ export default defineEventHandler((event) => {
     ].join(' ')
   }).toString();
 
-  return htmlRedirect(event, `https://accounts.google.com/o/oauth2/v2/auth?${qs}`);
+  const fullUrl = `https://accounts.google.com/o/oauth2/v2/auth?${qs}`;
+  return htmlRedirect(event, fullUrl);
 });
