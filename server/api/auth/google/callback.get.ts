@@ -1,57 +1,64 @@
 import type { H3Event } from 'h3';
 import { getRequestHeader } from 'h3';
-import { getPublicOrigin } from '~/server/utils/publicOrigin';
 import { useDb } from '~/server/utils/db';
+import { getPublicOrigin } from '~/server/utils/publicOrigin';
+import { htmlRedirect } from '~/server/utils/htmlRedirect';
+import { ensureEnvLoaded } from '~/server/utils/env';
+import { log, logEnvSnapshot } from '~/server/utils/log';
 
 export default defineEventHandler(async (event: H3Event) => {
-  console.log('[google:callback] hit');
+  ensureEnvLoaded();
+
+  log(event, 'INFO', 'google:callback');
 
   const query = getQuery(event);
   const code = query.code ? String(query.code) : '';
 
   if (!code) {
-    console.warn('[google:callback] missing code');
-    event.node.res.writeHead(302, { Location: '/login?error=no_code' });
-    event.node.res.end();
-    return;
+    log(event, 'WARN', 'google:callback missing code');
+    return htmlRedirect(event, '/login?error=no_code');
   }
 
-  const googleClientId = process.env.GOOGLE_CLIENT_ID;
-  const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const cfg = useRuntimeConfig() as any;
+
+  const googleClientId =
+    cfg.googleClientId ||
+    process.env.GOOGLE_CLIENT_ID ||
+    '';
+
+  const googleClientSecret =
+    cfg.googleClientSecret ||
+    process.env.GOOGLE_CLIENT_SECRET ||
+    '';
 
   if (!googleClientId || !googleClientSecret) {
-    console.error('[google:callback] missing env', {
+    log(event, 'ERROR', 'google:callback missing google creds', {
       hasId: !!googleClientId,
       hasSecret: !!googleClientSecret
     });
-    event.node.res.writeHead(302, { Location: '/login?error=server_error' });
-    event.node.res.end();
-    return;
+    logEnvSnapshot(event);
+    return htmlRedirect(event, '/login?error=server_error');
   }
 
   const baseUrl = getPublicOrigin(event);
   const redirectUri = `${baseUrl}/api/auth/google/callback`;
-  console.log('[google:callback] redirectUri=', redirectUri);
 
   try {
     const token: any = await $fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
         code,
         client_id: googleClientId,
         client_secret: googleClientSecret,
         redirect_uri: redirectUri,
         grant_type: 'authorization_code'
-      })
+      }).toString()
     });
-
-    console.log('[google:callback] token ok');
 
     const googleUser: any = await $fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
       headers: { Authorization: `Bearer ${token.access_token}` }
     });
-
-    console.log('[google:callback] email=', googleUser?.email);
 
     const db = await useDb();
 
@@ -72,10 +79,8 @@ export default defineEventHandler(async (event: H3Event) => {
       const allowedDomains = ['casitaiedis.edu.mx', 'iedis.edu.mx', 'gmail.com'];
 
       if (!allowedDomains.includes(domain)) {
-        console.warn('[google:callback] unauthorized domain=', domain);
-        event.node.res.writeHead(302, { Location: '/login?error=unauthorized_domain' });
-        event.node.res.end();
-        return;
+        log(event, 'WARN', 'google:callback unauthorized domain', { domain });
+        return htmlRedirect(event, '/login?error=unauthorized_domain');
       }
 
       const [roles]: any = await db.execute('SELECT id FROM roles WHERE nivel_permiso = 1 LIMIT 1');
@@ -99,7 +104,6 @@ export default defineEventHandler(async (event: H3Event) => {
       );
 
       user = newRows[0];
-      console.log('[google:callback] created user id=', user.id);
     } else {
       const googleId = googleUser.sub || googleUser.id;
       await db.execute('UPDATE users SET google_id = ?, avatar_url = ? WHERE id = ?', [
@@ -107,7 +111,6 @@ export default defineEventHandler(async (event: H3Event) => {
         googleUser.picture,
         user.id
       ]);
-      console.log('[google:callback] updated user id=', user.id);
     }
 
     const isHttps =
@@ -134,17 +137,13 @@ export default defineEventHandler(async (event: H3Event) => {
       path: '/'
     });
 
-    console.log('[google:callback] success');
-
-    event.node.res.writeHead(302, { Location: '/' });
-    event.node.res.end();
+    return htmlRedirect(event, '/');
   } catch (err: any) {
-    console.error('[google:callback] FAILED', {
+    log(event, 'ERROR', 'google:callback FAILED', {
       message: err?.message,
       status: err?.status,
       data: err?.data
     });
-    event.node.res.writeHead(302, { Location: '/login?error=server_error' });
-    event.node.res.end();
+    return htmlRedirect(event, '/login?error=server_error');
   }
 });

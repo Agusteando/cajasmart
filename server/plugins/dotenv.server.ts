@@ -1,8 +1,11 @@
-import 'dotenv/config';
+import { ensureEnvLoaded, envDebugSnapshot } from '~/server/utils/env';
 
 export default defineNitroPlugin(() => {
-  // Minimal runtime proof (no secrets)
-  console.log('[env] cwd=', process.cwd());
-  console.log('[env] GOOGLE_CLIENT_ID present=', !!process.env.GOOGLE_CLIENT_ID);
-  console.log('[env] GOOGLE_CLIENT_SECRET present=', !!process.env.GOOGLE_CLIENT_SECRET);
+  ensureEnvLoaded();
+
+  const s = envDebugSnapshot();
+  console.log('[env] cwd=', s.cwd);
+  console.log('[env] dotenv loaded from=', s.loadedFrom.length ? s.loadedFrom.join(', ') : '(none)');
+  console.log('[env] GOOGLE_CLIENT_ID present=', s.GOOGLE_CLIENT_ID_present);
+  console.log('[env] GOOGLE_CLIENT_SECRET present=', s.GOOGLE_CLIENT_SECRET_present);
 });

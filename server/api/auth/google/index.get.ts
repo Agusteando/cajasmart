@@ -1,22 +1,28 @@
 import { getPublicOrigin } from '~/server/utils/publicOrigin';
+import { htmlRedirect } from '~/server/utils/htmlRedirect';
+import { ensureEnvLoaded } from '~/server/utils/env';
+import { log, logEnvSnapshot } from '~/server/utils/log';
 
 export default defineEventHandler((event) => {
-  console.log('[google:index] hit');
+  ensureEnvLoaded();
 
-  const googleClientId = process.env.GOOGLE_CLIENT_ID;
+  log(event, 'INFO', 'google:index');
+
+  const cfg = useRuntimeConfig() as any;
+
+  const googleClientId =
+    cfg.googleClientId ||
+    process.env.GOOGLE_CLIENT_ID ||
+    '';
 
   if (!googleClientId) {
-    console.error('[google:index] GOOGLE_CLIENT_ID missing');
-    event.node.res.writeHead(302, { Location: '/login?error=server_error' });
-    event.node.res.end();
-    return;
+    log(event, 'ERROR', 'google:index missing GOOGLE_CLIENT_ID');
+    logEnvSnapshot(event);
+    return htmlRedirect(event, '/login?error=server_error');
   }
 
   const baseUrl = getPublicOrigin(event);
   const redirectUri = `${baseUrl}/api/auth/google/callback`;
-
-  console.log('[google:index] baseUrl=', baseUrl);
-  console.log('[google:index] redirectUri=', redirectUri);
 
   const qs = new URLSearchParams({
     redirect_uri: redirectUri,
@@ -32,7 +38,6 @@ export default defineEventHandler((event) => {
 
   const fullUrl = `https://accounts.google.com/o/oauth2/v2/auth?${qs}`;
 
-  // HTML redirect to avoid IIS/ARR rewriting Location headers
-  event.node.res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  event.node.res.end(`<!doctype html><script>location.replace(${JSON.stringify(fullUrl)})</script>`);
+  // HTML redirect avoids IIS/ARR issues with Location headers
+  return htmlRedirect(event, fullUrl);
 });
