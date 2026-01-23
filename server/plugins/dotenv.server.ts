@@ -1,7 +1,6 @@
 import { ensureEnvLoaded, envDebugSnapshot } from '~/server/utils/env';
 
 export default defineNitroPlugin(() => {
-  // Never crash Nitro if dotenv fails
   ensureEnvLoaded();
 
   const s = envDebugSnapshot();

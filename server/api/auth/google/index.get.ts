@@ -1,10 +1,11 @@
 import { getPublicOrigin } from '~/server/utils/publicOrigin';
 import { htmlRedirect } from '~/server/utils/htmlRedirect';
-import { log, logEnvSnapshot } from '~/server/utils/log';
-import { ensureEnvLoaded, normalizeEnvValue, envDebugSnapshot } from '~/server/utils/env';
+import { ensureEnvLoaded, normalizeEnvValue, maskMid } from '~/server/utils/env';
+import { log, logEnvSnapshot, logStep } from '~/server/utils/log';
 
 export default defineEventHandler((event) => {
   ensureEnvLoaded();
+  logStep(event, 'index:hit');
 
   const cfg = useRuntimeConfig() as any;
 
@@ -13,12 +14,17 @@ export default defineEventHandler((event) => {
   if (!googleClientId) {
     log(event, 'ERROR', 'google:index missing GOOGLE_CLIENT_ID');
     logEnvSnapshot(event);
-    log(event, 'DEBUG', 'env loader snapshot', envDebugSnapshot() as any);
-    return htmlRedirect(event, '/login?error=oauth_client');
+    return htmlRedirect(event, '/login?error=server_error');
   }
 
   const baseUrl = getPublicOrigin(event);
   const redirectUri = `${baseUrl}/api/auth/google/callback`;
+
+  logStep(event, 'index:computed', {
+    baseUrl,
+    redirectUri,
+    clientId: maskMid(googleClientId)
+  });
 
   const qs = new URLSearchParams({
     redirect_uri: redirectUri,

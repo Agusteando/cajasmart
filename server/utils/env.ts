@@ -1,7 +1,7 @@
 import { config as loadDotenv } from 'dotenv';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
 let _loaded = false;
 let _loadedFrom: string[] = [];
@@ -9,7 +9,7 @@ let _loadedFrom: string[] = [];
 export function normalizeEnvValue(v: unknown): string {
   let s = String(v ?? '').trim();
 
-  // Strip wrapping quotes: GOOGLE_CLIENT_ID="..." or '...'
+  // Strip wrapping quotes: KEY="..." or '...'
   if (
     (s.startsWith('"') && s.endsWith('"') && s.length >= 2) ||
     (s.startsWith("'") && s.endsWith("'") && s.length >= 2)
@@ -27,54 +27,67 @@ export function maskMid(value: string, head = 6, tail = 6) {
 }
 
 /**
- * Convert user-provided DOTENV_PATH into an absolute filesystem path.
- * Supports:
- *  - absolute/relative paths
- *  - file: URLs (even relative ones like file:.env) by resolving against cwd
+ * Convert something like:
+ *  - ".env" / "C:\\...\\.env" -> absolute fs path
+ *  - "file:///C:/.../.env" -> fs path
+ *  - "file:.env" (BAD url) -> treat as ".env" path (no fileURLToPath call)
  */
-function toFsPath(input: string, cwd: string) {
-  const s = normalizeEnvValue(input);
+function toFsPath(input: string, cwd: string): string {
+  let s = normalizeEnvValue(input);
   if (!s) return '';
 
-  // file: URL support (and fix for "File URL path must be absolute")
+  // Handle file: URLs safely.
   if (s.startsWith('file:')) {
-    const base = pathToFileURL(cwd.endsWith(path.sep) ? cwd : cwd + path.sep);
-    const url = new URL(s, base); // makes it absolute
-    return fileURLToPath(url);
+    // Only attempt fileURLToPath when it is a real absolute file URL.
+    // file:.env is NOT absolute and will throw on Windows -> treat as path.
+    if (s.startsWith('file:///') || s.startsWith('file://localhost/')) {
+      try {
+        return fileURLToPath(new URL(s));
+      } catch {
+        // fall through to treating as path
+      }
+    }
+
+    // Treat "file:.env" or other weird forms as a normal path
+    s = s.slice('file:'.length);
+    s = s.replace(/^\/+/, ''); // avoid "///" becoming UNC-ish
   }
 
   return path.isAbsolute(s) ? s : path.resolve(cwd, s);
 }
 
-function candidateDirs(cwd: string) {
-  const dirs = [cwd];
+function walkUpDirs(start: string, maxLevels = 6) {
+  const dirs: string[] = [];
+  let cur = start;
 
-  // If running from ".output/server" somehow, also check project root
-  const norm = cwd.replace(/\\/g, '/');
-  if (norm.endsWith('/.output/server')) dirs.push(path.resolve(cwd, '..', '..'));
-  if (norm.endsWith('/.output')) dirs.push(path.resolve(cwd, '..'));
+  for (let i = 0; i < maxLevels; i++) {
+    dirs.push(cur);
+    const parent = path.dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+  }
 
   // de-dupe
   return Array.from(new Set(dirs));
 }
 
 function buildCandidates(cwd: string) {
-  const dirs = candidateDirs(cwd);
-
   const names = ['.env', '.env.local', '.env.production', '.env.production.local'];
+
+  // Look in cwd and parent dirs (covers cases where pm2 runs in .output/server)
+  const dirs = walkUpDirs(cwd, 7);
 
   const candidates: string[] = [];
 
-  // optional explicit override
+  // Optional override, but never crash if it is weird
   const raw = normalizeEnvValue(process.env.DOTENV_PATH);
   if (raw) candidates.push(toFsPath(raw, cwd));
 
-  // common dotenv files in cwd / parent candidates
   for (const dir of dirs) {
     for (const n of names) candidates.push(path.resolve(dir, n));
   }
 
-  // de-dupe + keep only absolute filesystem paths
+  // Keep only absolute paths, de-dupe
   return Array.from(new Set(candidates)).filter((p) => !!p && path.isAbsolute(p));
 }
 
