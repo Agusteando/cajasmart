@@ -1,44 +1,40 @@
 import { getRequestURL } from 'h3';
-import { log, logHeaders, getReqId } from '~/server/utils/log';
+import { getReqId, log, logHeaders } from '~/server/utils/log';
 
-export default defineNitroPlugin((nitroApp) => {
-  nitroApp.hooks.hook('request', (event) => {
-    const url = getRequestURL(event);
-    const path = url.pathname;
+function shouldSkip(path: string) {
+  return (
+    path.startsWith('/_nuxt/') ||
+    path === '/favicon.ico' ||
+    path === '/robots.txt' ||
+    path.startsWith('/uploads/')
+  );
+}
 
-    if (
-      path.startsWith('/_nuxt/') ||
-      path === '/favicon.ico' ||
-      path === '/robots.txt' ||
-      path.startsWith('/uploads/')
-    ) return;
+export default defineEventHandler((event) => {
+  const url = getRequestURL(event);
+  const path = url.pathname;
 
-    (event.context as any)._t0 = Date.now();
-    getReqId(event);
-    log(event, 'INFO', 'request:start');
-    logHeaders(event);
-  });
+  if (shouldSkip(path)) return;
 
-  nitroApp.hooks.hook('afterResponse', (event) => {
-    const url = getRequestURL(event);
-    const path = url.pathname;
+  // Start timer once
+  (event.context as any)._t0 ??= Date.now();
 
-    if (
-      path.startsWith('/_nuxt/') ||
-      path === '/favicon.ico' ||
-      path === '/robots.txt' ||
-      path.startsWith('/uploads/')
-    ) return;
+  // Ensure request id is available early
+  getReqId(event);
 
+  // Log request start + headers
+  log(event, 'INFO', 'request:start');
+  logHeaders(event);
+
+  // Avoid attaching finish listener more than once
+  if ((event.context as any)._traceFinishAttached) return;
+  (event.context as any)._traceFinishAttached = true;
+
+  event.node.res.once('finish', () => {
     const t0 = (event.context as any)._t0 || Date.now();
-    log(event, 'INFO', 'request:end', { ms: Date.now() - t0 });
-  });
-
-  nitroApp.hooks.hook('error', (error, event) => {
-    if (!event) return;
-    log(event, 'ERROR', 'nitro:error', {
-      message: (error as any)?.message,
-      stack: (error as any)?.stack
+    log(event, 'INFO', 'request:end', {
+      status: event.node.res.statusCode,
+      ms: Date.now() - t0
     });
   });
 });

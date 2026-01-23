@@ -19,12 +19,24 @@ export function getReqId(event: H3Event) {
   const id = (headerId && String(headerId).trim()) || randomUUID();
   (event.context as any).reqId = id;
 
-  // helpful when debugging through proxies
-  event.node.res.setHeader('x-request-id', id);
+  // helpful when debugging through proxies (guard if already sent)
+  try {
+    if (!event.node.res.headersSent) {
+      event.node.res.setHeader('x-request-id', id);
+    }
+  } catch {
+    // ignore header-set failures during/after response
+  }
+
   return id;
 }
 
-export function log(event: H3Event, level: Level, message: string, data?: Record<string, any>) {
+export function log(
+  event: H3Event,
+  level: Level,
+  message: string,
+  data?: Record<string, any>
+) {
   const reqId = getReqId(event);
   const url = getRequestURL(event);
   const method = event.node.req.method;
@@ -35,11 +47,10 @@ export function log(event: H3Event, level: Level, message: string, data?: Record
     reqId,
     method,
     path: url.pathname + url.search,
-    message,
+    msg: message,
     ...(data ? { data } : {})
   };
 
-  // Use console so PM2/IIS captures stdout/stderr reliably
   if (level === 'ERROR') console.error(JSON.stringify(payload));
   else if (level === 'WARN') console.warn(JSON.stringify(payload));
   else console.log(JSON.stringify(payload));
@@ -64,11 +75,11 @@ export function logEnvSnapshot(event: H3Event) {
   const cfg = useRuntimeConfig();
   log(event, 'DEBUG', 'env snapshot', {
     NODE_ENV: process.env.NODE_ENV,
-    BASE_URL_cfg: cfg.baseUrl || null,
+    BASE_URL_cfg: (cfg as any).baseUrl || null,
     BASE_URL_env: process.env.BASE_URL || null,
-    GOOGLE_CLIENT_ID_cfg: mask(cfg.googleClientId),
+    GOOGLE_CLIENT_ID_cfg: mask((cfg as any).googleClientId),
     GOOGLE_CLIENT_ID_env: mask(process.env.GOOGLE_CLIENT_ID),
-    GOOGLE_CLIENT_SECRET_cfg: mask(cfg.googleClientSecret),
+    GOOGLE_CLIENT_SECRET_cfg: mask((cfg as any).googleClientSecret),
     GOOGLE_CLIENT_SECRET_env: mask(process.env.GOOGLE_CLIENT_SECRET)
   });
 }
