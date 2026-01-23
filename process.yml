@@ -7,5 +7,6 @@ apps:
       NODE_ENV: production
       PORT: 15776
       NITRO_LOG_LEVEL: debug
+      DOTENV_PATH: C:\Server\htdocs\cajasmart\.env
     merge_logs: true
     time: true

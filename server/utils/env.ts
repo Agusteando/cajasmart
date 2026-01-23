@@ -1,9 +1,11 @@
 import { config as loadDotenv } from 'dotenv';
 import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 let _loaded = false;
 let _loadedFrom: string[] = [];
+let _searched: string[] = [];
 
 export function normalizeEnvValue(v: unknown): string {
   let s = String(v ?? '').trim();
@@ -25,19 +27,40 @@ export function maskMid(value: string, head = 6, tail = 6) {
   return `${s.slice(0, head)}***${s.slice(-tail)}`;
 }
 
-export function ensureEnvLoaded() {
-  if (_loaded) return { loaded: _loaded, loadedFrom: _loadedFrom };
+function buildCandidates(): string[] {
+  const candidates: string[] = [];
 
+  // 1) Explicit override
+  const dotenvPath = normalizeEnvValue(process.env.DOTENV_PATH);
+  if (dotenvPath) candidates.push(resolve(dotenvPath));
+
+  // 2) From current working directory
   const cwd = process.cwd();
-  const candidates = [
-    process.env.DOTENV_PATH ? resolve(process.env.DOTENV_PATH) : null,
-    resolve(cwd, '.env'),
-    resolve(cwd, '.env.local'),
-    resolve(cwd, '.env.production'),
-    resolve(cwd, '.env.production.local')
-  ].filter(Boolean) as string[];
+  for (const name of ['.env', '.env.local', '.env.production', '.env.production.local']) {
+    candidates.push(resolve(cwd, name));
+  }
 
+  // 3) From this file location (works even when running from .output/server)
+  // Walk up several parents, looking for .env files
+  const here = dirname(fileURLToPath(import.meta.url));
+  for (let i = 0; i <= 6; i++) {
+    const up = resolve(here, ...Array(i).fill('..'));
+    for (const name of ['.env', '.env.local', '.env.production', '.env.production.local']) {
+      candidates.push(resolve(up, name));
+    }
+  }
+
+  // de-dupe
+  return Array.from(new Set(candidates));
+}
+
+export function ensureEnvLoaded() {
+  if (_loaded) return { loaded: _loaded, loadedFrom: _loadedFrom, searched: _searched };
+
+  const candidates = buildCandidates();
+  _searched = candidates;
   _loadedFrom = [];
+
   for (const p of candidates) {
     if (existsSync(p)) {
       loadDotenv({ path: p, override: false });
@@ -46,7 +69,7 @@ export function ensureEnvLoaded() {
   }
 
   _loaded = true;
-  return { loaded: _loaded, loadedFrom: _loadedFrom };
+  return { loaded: _loaded, loadedFrom: _loadedFrom, searched: _searched };
 }
 
 export function envDebugSnapshot() {
@@ -56,6 +79,8 @@ export function envDebugSnapshot() {
   return {
     cwd: process.cwd(),
     loadedFrom: _loadedFrom,
+    searchedCount: _searched.length,
+    searchedPreview: _searched.slice(0, 8), // keep logs short
     GOOGLE_CLIENT_ID_present: !!id,
     GOOGLE_CLIENT_SECRET_present: !!secret,
     GOOGLE_CLIENT_ID_masked: maskMid(id),

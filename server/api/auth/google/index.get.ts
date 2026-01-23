@@ -1,11 +1,10 @@
 import { getPublicOrigin } from '~/server/utils/publicOrigin';
 import { htmlRedirect } from '~/server/utils/htmlRedirect';
-import { log, logEnvSnapshot, logStep } from '~/server/utils/log';
-import { ensureEnvLoaded, normalizeEnvValue, maskMid } from '~/server/utils/env';
+import { log, logEnvSnapshot } from '~/server/utils/log';
+import { ensureEnvLoaded, normalizeEnvValue, envDebugSnapshot } from '~/server/utils/env';
 
 export default defineEventHandler((event) => {
   ensureEnvLoaded();
-  logStep(event, 'index:hit');
 
   const cfg = useRuntimeConfig() as any;
 
@@ -14,17 +13,12 @@ export default defineEventHandler((event) => {
   if (!googleClientId) {
     log(event, 'ERROR', 'google:index missing GOOGLE_CLIENT_ID');
     logEnvSnapshot(event);
+    log(event, 'DEBUG', 'env loader snapshot', envDebugSnapshot() as any);
     return htmlRedirect(event, '/login?error=oauth_client');
   }
 
   const baseUrl = getPublicOrigin(event);
   const redirectUri = `${baseUrl}/api/auth/google/callback`;
-
-  logStep(event, 'index:computed', {
-    baseUrl,
-    redirectUri,
-    clientId: maskMid(googleClientId)
-  });
 
   const qs = new URLSearchParams({
     redirect_uri: redirectUri,
@@ -39,6 +33,5 @@ export default defineEventHandler((event) => {
     ].join(' ')
   }).toString();
 
-  const fullUrl = `https://accounts.google.com/o/oauth2/v2/auth?${qs}`;
-  return htmlRedirect(event, fullUrl);
+  return htmlRedirect(event, `https://accounts.google.com/o/oauth2/v2/auth?${qs}`);
 });
