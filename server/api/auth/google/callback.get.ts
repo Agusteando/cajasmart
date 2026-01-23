@@ -1,42 +1,81 @@
 import type { H3Event } from 'h3';
 import { getRequestHeader } from 'h3';
+import { Buffer } from 'node:buffer';
 import { useDb } from '~/server/utils/db';
 import { getPublicOrigin } from '~/server/utils/publicOrigin';
 import { htmlRedirect } from '~/server/utils/htmlRedirect';
 import { log, logEnvSnapshot, logStep } from '~/server/utils/log';
+import { ensureEnvLoaded, normalizeEnvValue, maskMid } from '~/server/utils/env';
 
 function extractFetchError(err: any) {
-  // ofetch FetchError usually has: err.response.status, err.response._data
   const status = err?.response?.status ?? err?.status;
   const data = err?.response?._data ?? err?.data;
   return { status, data, message: err?.message };
 }
 
+async function exchangeTokenWithBody(params: {
+  code: string;
+  clientId: string;
+  clientSecret: string;
+  redirectUri: string;
+}) {
+  return await $fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      code: params.code,
+      client_id: params.clientId,
+      client_secret: params.clientSecret,
+      redirect_uri: params.redirectUri,
+      grant_type: 'authorization_code'
+    }).toString()
+  });
+}
+
+async function exchangeTokenWithBasic(params: {
+  code: string;
+  clientId: string;
+  clientSecret: string;
+  redirectUri: string;
+}) {
+  const basic = Buffer.from(`${params.clientId}:${params.clientSecret}`).toString('base64');
+
+  return await $fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Authorization: `Basic ${basic}`
+    },
+    body: new URLSearchParams({
+      code: params.code,
+      redirect_uri: params.redirectUri,
+      grant_type: 'authorization_code'
+    }).toString()
+  });
+}
+
 export default defineEventHandler(async (event: H3Event) => {
+  ensureEnvLoaded();
   logStep(event, 'callback:hit');
 
   const query = getQuery(event);
   const code = query.code ? String(query.code) : '';
-  const scope = query.scope ? String(query.scope) : '';
   const error = query.error ? String(query.error) : '';
 
-  // Google can send ?error=access_denied when user cancels
   if (error) {
-    log(event, 'WARN', 'google:callback returned error from google', { error });
+    log(event, 'WARN', 'google:callback google returned error', { error });
     return htmlRedirect(event, '/login?error=no_code');
   }
 
   if (!code) {
-    log(event, 'WARN', 'google:callback missing code', { scope });
+    log(event, 'WARN', 'google:callback missing code');
     return htmlRedirect(event, '/login?error=no_code');
   }
 
   const cfg = useRuntimeConfig() as any;
 
-  const googleClientId =
-    String(cfg.googleClientId || process.env.GOOGLE_CLIENT_ID || '').trim();
-  const googleClientSecret =
-    String(cfg.googleClientSecret || process.env.GOOGLE_CLIENT_SECRET || '').trim();
+  const clientId = normalizeEnvValue(cfg.googleClientId ?? process.env.GOOGLE_CLIENT_ID);
+  const clientSecret = normalizeEnvValue(cfg.googleClientSecret ?? process.env.GOOGLE_CLIENT_SECRET);
 
   const baseUrl = getPublicOrigin(event);
   const redirectUri = `${baseUrl}/api/auth/google/callback`;
@@ -44,65 +83,76 @@ export default defineEventHandler(async (event: H3Event) => {
   logStep(event, 'callback:computed', {
     baseUrl,
     redirectUri,
-    hasClientId: !!googleClientId,
-    hasClientSecret: !!googleClientSecret,
+    clientId: maskMid(clientId),
+    clientSecret: clientSecret ? `***${clientSecret.slice(-6)}` : '',
     codeLen: code.length
   });
 
-  if (!googleClientId || !googleClientSecret) {
+  if (!clientId || !clientSecret) {
     log(event, 'ERROR', 'google:callback missing creds');
     logEnvSnapshot(event);
-    return htmlRedirect(event, '/login?error=server_error');
+    return htmlRedirect(event, '/login?error=oauth_client');
   }
 
   let token: any;
+
+  // Attempt 1: credentials in body
   try {
-    logStep(event, 'token:exchange:start');
-
-    token = await $fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        code,
-        client_id: googleClientId,
-        client_secret: googleClientSecret,
-        redirect_uri: redirectUri,
-        grant_type: 'authorization_code'
-      }).toString()
-    });
-
-    logStep(event, 'token:exchange:ok', {
+    logStep(event, 'token:exchange:body:start');
+    token = await exchangeTokenWithBody({ code, clientId, clientSecret, redirectUri });
+    logStep(event, 'token:exchange:body:ok', {
       hasAccessToken: !!token?.access_token,
       tokenType: token?.token_type
     });
   } catch (err: any) {
     const e = extractFetchError(err);
-    log(event, 'ERROR', 'token:exchange:failed', {
+    const googleErr = e.data?.error;
+
+    log(event, 'ERROR', 'token:exchange:body:failed', {
       ...e,
-      hint:
-        'If data.error is "redirect_uri_mismatch", set BASE_URL to the exact public URL and add the exact redirect URI in Google Console.'
+      clientId: maskMid(clientId),
+      clientSecret: clientSecret ? `***${clientSecret.slice(-6)}` : ''
     });
-    return htmlRedirect(event, '/login?error=server_error');
+
+    // If Google says invalid_client, try Basic auth as a fallback.
+    if (e.status === 401 && googleErr === 'invalid_client') {
+      try {
+        logStep(event, 'token:exchange:basic:retry:start');
+        token = await exchangeTokenWithBasic({ code, clientId, clientSecret, redirectUri });
+        logStep(event, 'token:exchange:basic:retry:ok', {
+          hasAccessToken: !!token?.access_token,
+          tokenType: token?.token_type
+        });
+      } catch (err2: any) {
+        const e2 = extractFetchError(err2);
+        log(event, 'ERROR', 'token:exchange:basic:retry:failed', {
+          ...e2,
+          hint:
+            'Google returned invalid_client. This almost always means the OAuth Client ID/Secret do not match. Verify you are using a "Web application" OAuth client and the current secret.'
+        });
+        return htmlRedirect(event, '/login?error=oauth_client');
+      }
+    } else {
+      // other errors: redirect mismatch, invalid_grant, etc
+      return htmlRedirect(event, '/login?error=server_error');
+    }
   }
 
+  // userinfo
   let googleUser: any;
   try {
     logStep(event, 'userinfo:fetch:start');
-
     googleUser = await $fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
       headers: { Authorization: `Bearer ${token.access_token}` }
     });
-
-    logStep(event, 'userinfo:fetch:ok', {
-      email: googleUser?.email,
-      sub: googleUser?.sub
-    });
+    logStep(event, 'userinfo:fetch:ok', { email: googleUser?.email, sub: googleUser?.sub });
   } catch (err: any) {
     const e = extractFetchError(err);
     log(event, 'ERROR', 'userinfo:fetch:failed', e as any);
     return htmlRedirect(event, '/login?error=server_error');
   }
 
+  // DB + cookie
   try {
     logStep(event, 'db:connect:start');
     const db = await useDb();
@@ -186,13 +236,9 @@ export default defineEventHandler(async (event: H3Event) => {
     });
 
     logStep(event, 'cookie:set', { secure: isHttps, userId: sessionUser.id });
-
     return htmlRedirect(event, '/');
   } catch (err: any) {
-    log(event, 'ERROR', 'db:flow:failed', {
-      message: err?.message,
-      stack: err?.stack
-    });
+    log(event, 'ERROR', 'db:flow:failed', { message: err?.message, stack: err?.stack });
     return htmlRedirect(event, '/login?error=server_error');
   }
 });
