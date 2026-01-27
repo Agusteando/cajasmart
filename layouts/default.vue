@@ -18,13 +18,43 @@
       <nav class="flex-1 px-4 py-6 space-y-2 overflow-y-auto">
         <p class="px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Principal</p>
 
+        <!-- Keep Dashboard; middleware will redirect non-super admins from / to their role home -->
         <NavLink to="/" icon="HomeIcon">Dashboard</NavLink>
 
-        <!-- Workspaces -->
-        <NavLink v-if="showReembolsos" to="/reembolsos" icon="CurrencyDollarIcon">Reembolsos</NavLink>
-        <NavLink v-if="showOps" to="/ops" icon="ClipboardDocumentCheckIcon">Operativo</NavLink>
-        <NavLink v-if="showFiscal" to="/fiscal" icon="ScaleIcon">Fiscal</NavLink>
-        <NavLink v-if="showTesoreria" to="/tesoreria" icon="BanknotesIcon">Tesorería</NavLink>
+        <!-- Role workspaces -->
+        <NavLink
+          v-if="user?.role_name === 'ADMIN_PLANTEL' || user?.role_name === 'SUPER_ADMIN'"
+          to="/reembolsos"
+          icon="CurrencyDollarIcon"
+        >
+          Mis Reembolsos
+        </NavLink>
+
+        <NavLink
+          v-if="user?.role_name === 'REVISOR_OPS' || user?.role_name === 'SUPER_ADMIN'"
+          to="/ops"
+          icon="ClipboardDocumentCheckIcon"
+        >
+          Revisión Operativa
+        </NavLink>
+
+        <NavLink
+          v-if="user?.role_name === 'REVISOR_FISCAL' || user?.role_name === 'SUPER_ADMIN'"
+          to="/fiscal"
+          icon="ScaleIcon"
+        >
+          Revisión Fiscal
+        </NavLink>
+
+        <NavLink
+          v-if="user?.role_name === 'TESORERIA' || user?.role_name === 'SUPER_ADMIN'"
+          to="/tesoreria"
+          icon="BanknotesIcon"
+        >
+          Tesorería
+        </NavLink>
+
+        <NavLink to="/notificaciones" icon="BellIcon">Notificaciones</NavLink>
 
         <!-- Admin Section -->
         <div v-if="user?.role_name === 'SUPER_ADMIN'">
@@ -98,7 +128,11 @@
         <h2 class="text-2xl font-semibold text-slate-800 capitalize tracking-tight">
           {{ route.meta.title || route.name }}
         </h2>
+
         <div class="flex items-center gap-4">
+          <!-- Notifications bell (unread badge) -->
+          <NotificationsBell />
+
           <span
             class="px-3 py-1 bg-indigo-50 text-indigo-700 text-xs font-bold rounded-full border border-indigo-100 flex items-center gap-2"
           >
@@ -123,26 +157,6 @@ const route = useRoute();
 const userCookie = useUserCookie();
 
 const user = computed(() => userCookie.value);
-
-const showReembolsos = computed(() => {
-  const r = user.value?.role_name;
-  return r === 'ADMIN_PLANTEL' || r === 'SUPER_ADMIN';
-});
-
-const showOps = computed(() => {
-  const r = user.value?.role_name;
-  return r === 'REVISOR_OPS' || r === 'SUPER_ADMIN';
-});
-
-const showFiscal = computed(() => {
-  const r = user.value?.role_name;
-  return r === 'REVISOR_FISCAL' || r === 'SUPER_ADMIN';
-});
-
-const showTesoreria = computed(() => {
-  const r = user.value?.role_name;
-  return r === 'TESORERIA' || r === 'SUPER_ADMIN';
-});
 
 const stopImpersonation = async () => {
   try {

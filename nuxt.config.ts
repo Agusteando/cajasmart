@@ -24,8 +24,15 @@ export default defineNuxtConfig({
     googleClientId: process.env.GOOGLE_CLIENT_ID,
     googleClientSecret: process.env.GOOGLE_CLIENT_SECRET,
 
+    // server-only (Web Push)
+    vapidSubject: process.env.VAPID_SUBJECT || '',
+    vapidPublicKey: process.env.VAPID_PUBLIC_KEY || '',
+    vapidPrivateKey: process.env.VAPID_PRIVATE_KEY || '',
+
     public: {
-      appName: 'CajaSmart IECS-IEDIS'
+      appName: 'CajaSmart IECS-IEDIS',
+      // client-safe (used for Push subscribe)
+      vapidPublicKey: process.env.VAPID_PUBLIC_KEY || ''
     }
   }
 });

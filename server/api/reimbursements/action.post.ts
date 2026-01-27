@@ -10,6 +10,7 @@ interface WorkflowAction {
   paymentRef?: string;
 }
 
+// Define valid transitions
 const VALID_TRANSITIONS: Record<string, Record<string, { requiredRole: string; nextStatus: string }>> = {
   PENDING_OPS_REVIEW: {
     APPROVE: { requiredRole: 'REVISOR_OPS', nextStatus: 'PENDING_FISCAL_REVIEW' },
@@ -31,11 +32,17 @@ export default defineEventHandler(async (event) => {
   const { id, action, reason, paymentRef } = body;
 
   if (!id || !action) {
-    throw createError({ statusCode: 400, statusMessage: 'ID y acción son requeridos' });
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'ID y acción son requeridos'
+    });
   }
 
   if (action === 'RETURN' && !reason?.trim()) {
-    throw createError({ statusCode: 400, statusMessage: 'El motivo/observaciones es requerido' });
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'El motivo de devolución es requerido'
+    });
   }
 
   const db = await useDb();
@@ -49,48 +56,59 @@ export default defineEventHandler(async (event) => {
   );
 
   if (!rows.length) {
-    throw createError({ statusCode: 404, statusMessage: 'Solicitud no encontrada' });
+    throw createError({
+      statusCode: 404,
+      statusMessage: 'Solicitud no encontrada'
+    });
   }
 
-  const item = rows[0];
-  const currentStatus = String(item.status || '');
+  const reimbursement = rows[0];
+  const currentStatus = reimbursement.status;
 
   const transitions = VALID_TRANSITIONS[currentStatus];
-  const transition = transitions?.[action];
-
-  if (!transition) {
-    throw createError({ statusCode: 400, statusMessage: 'Acción no válida para el estado actual' });
+  if (!transitions || !transitions[action]) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: `Acción '${action}' no válida para estado '${currentStatus}'`
+    });
   }
 
-  // Permission Check
+  const transition = transitions[action];
+
   if (user.role_name !== 'SUPER_ADMIN' && user.role_name !== transition.requiredRole) {
-    throw createError({ statusCode: 403, statusMessage: 'No autorizado' });
+    throw createError({
+      statusCode: 403,
+      statusMessage: `Solo ${transition.requiredRole} puede realizar esta acción`
+    });
   }
 
-  const updates: string[] = ['status = ?', 'updated_at = NOW()'];
-  const params: any[] = [transition.nextStatus];
+  const newStatus = transition.nextStatus;
+
+  let updateFields: string[] = ['status = ?'];
+  let updateParams: any[] = [newStatus];
 
   if (action === 'RETURN') {
-    updates.push('rejection_reason = ?', 'returned_by = ?');
-    params.push(reason, user.id);
+    updateFields.push('rejection_reason = ?', 'returned_by = ?');
+    updateParams.push(reason, user.id);
   } else if (action === 'PROCESS') {
-    updates.push('processed_at = NOW()', 'processed_by = ?', 'payment_ref = ?');
-    params.push(user.id, paymentRef || null);
-  } else if (action === 'APPROVE') {
-    // Clear rejection info when approving
-    updates.push('rejection_reason = NULL', 'returned_by = NULL');
+    updateFields.push('processed_at = NOW()', 'processed_by = ?', 'payment_ref = ?');
+    updateParams.push(user.id, paymentRef || null);
   }
 
-  params.push(id);
-  await db.execute(`UPDATE reimbursements SET ${updates.join(', ')} WHERE id = ?`, params);
+  if (action === 'APPROVE') {
+    updateFields.push('rejection_reason = NULL', 'returned_by = NULL');
+  }
 
-  // Audit
+  updateParams.push(id);
+
+  await db.execute(`UPDATE reimbursements SET ${updateFields.join(', ')} WHERE id = ?`, updateParams);
+
   await createAuditLog({
     entityType: 'reimbursement',
     entityId: id,
-    action,
+    action: action,
     fromStatus: currentStatus,
-    toStatus: transition.nextStatus,
+    toStatus: newStatus,
     actorUserId: user.id,
     comment:
       action === 'RETURN'
@@ -100,61 +118,90 @@ export default defineEventHandler(async (event) => {
           : undefined
   });
 
-  // Notifications
-  const amountStr = Number.parseFloat(item.amount || 0).toFixed(2);
+  const amount = parseFloat(reimbursement.amount).toFixed(2);
 
-  if (action === 'APPROVE' && transition.nextStatus === 'PENDING_FISCAL_REVIEW') {
-    await notifyRoleUsers(
-      'REVISOR_FISCAL',
-      'NEW_PENDING',
-      'Nueva solicitud para revisión fiscal',
-      `Solicitud #${id} de $${amountStr} aprobada operativamente`,
-      'reimbursement',
-      id
-    );
+  switch (action) {
+    case 'APPROVE':
+      if (newStatus === 'PENDING_FISCAL_REVIEW') {
+        await notifyRoleUsers(
+          'REVISOR_FISCAL',
+          'NEW_PENDING',
+          'Nueva solicitud para revisión fiscal',
+          `Solicitud #${id} de $${amount} aprobada operativamente`,
+          'reimbursement',
+          id,
+          { url: '/fiscal', actorUserId: user.id }
+        );
+      } else if (newStatus === 'APPROVED') {
+        await notifyRoleUsers(
+          'TESORERIA',
+          'APPROVED',
+          'Solicitud lista para pago',
+          `Solicitud #${id} de $${amount} aprobada para pago`,
+          'reimbursement',
+          id,
+          { url: '/tesoreria', actorUserId: user.id }
+        );
+
+        await createNotification({
+          userId: reimbursement.user_id,
+          type: 'APPROVED',
+          title: 'Solicitud aprobada',
+          message: `Tu solicitud #${id} de $${amount} ha sido aprobada y está lista para pago`,
+          referenceType: 'reimbursement',
+          referenceId: id,
+          url: '/reembolsos',
+          actorUserId: user.id
+        });
+      }
+      break;
+
+    case 'RETURN':
+      await createNotification({
+        userId: reimbursement.user_id,
+        type: 'RETURNED',
+        title: 'Solicitud devuelta',
+        message: `Tu solicitud #${id} fue devuelta. Motivo: ${reason}`,
+        referenceType: 'reimbursement',
+        referenceId: id,
+        url: '/reembolsos',
+        actorUserId: user.id
+      });
+      break;
+
+    case 'PROCESS':
+      await createNotification({
+        userId: reimbursement.user_id,
+        type: 'PROCESSED',
+        title: 'Reembolso procesado',
+        message: `Tu solicitud #${id} de $${amount} ha sido procesada${paymentRef ? ` (Ref: ${paymentRef})` : ''}`,
+        referenceType: 'reimbursement',
+        referenceId: id,
+        url: '/reembolsos',
+        actorUserId: user.id
+      });
+      break;
   }
 
-  if (action === 'APPROVE' && transition.nextStatus === 'APPROVED') {
-    await notifyRoleUsers(
-      'TESORERIA',
-      'APPROVED',
-      'Solicitud lista para pago',
-      `Solicitud #${id} de $${amountStr} aprobada para pago`,
-      'reimbursement',
-      id
-    );
-
-    await createNotification({
-      userId: item.user_id,
-      type: 'APPROVED',
-      title: 'Solicitud aprobada',
-      message: `Tu solicitud #${id} de $${amountStr} ha sido aprobada y está lista para pago`,
-      referenceType: 'reimbursement',
-      referenceId: id
-    });
-  }
-
-  if (action === 'RETURN') {
-    await createNotification({
-      userId: item.user_id,
-      type: 'RETURNED',
-      title: 'Solicitud regresada',
-      message: `Tu solicitud #${id} fue regresada. Observaciones: ${reason}`,
-      referenceType: 'reimbursement',
-      referenceId: id
-    });
-  }
-
-  if (action === 'PROCESS') {
-    await createNotification({
-      userId: item.user_id,
-      type: 'PROCESSED',
-      title: 'Reembolso procesado',
-      message: `Tu solicitud #${id} de $${amountStr} ha sido procesada${paymentRef ? ` (Ref: ${paymentRef})` : ''}`,
-      referenceType: 'reimbursement',
-      referenceId: id
-    });
-  }
-
-  return { success: true, id, newStatus: transition.nextStatus };
+  return {
+    success: true,
+    id,
+    previousStatus: currentStatus,
+    newStatus,
+    message: getActionMessage(action, newStatus)
+  };
 });
+
+function getActionMessage(action: string, newStatus: string): string {
+  switch (action) {
+    case 'APPROVE':
+      if (newStatus === 'PENDING_FISCAL_REVIEW') return 'Aprobado operativamente, enviado a revisión fiscal';
+      if (newStatus === 'APPROVED') return 'Aprobado para pago';
+      break;
+    case 'RETURN':
+      return 'Devuelto al solicitante';
+    case 'PROCESS':
+      return 'Marcado como procesado/pagado';
+  }
+  return 'Acción completada';
+}

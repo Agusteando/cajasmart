@@ -35,24 +35,25 @@ export default defineEventHandler(async (event) => {
     `\nRol solicitado: ${requestedRole}${plantelInfo}` +
     (reason ? `\nMotivo: ${reason}` : '');
 
-  // Notify Super Admins
   await notifyRoleUsers(
     'SUPER_ADMIN',
     'ACCESS_REQUEST',
     'Solicitud de Acceso',
     msg,
     'user',
-    user.id
+    user.id,
+    { url: '/admin/usuarios', actorUserId: user.id }
   );
 
-  // Log self notification for UI state
   await createNotification({
     userId: user.id,
     type: 'ACCESS_REQUEST',
     title: 'Solicitud Enviada',
     message: 'Tu solicitud fue enviada. Un administrador la revisará.',
     referenceType: 'user',
-    referenceId: user.id
+    referenceId: user.id,
+    url: '/onboarding',
+    actorUserId: user.id
   });
 
   return { success: true };
