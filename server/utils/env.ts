@@ -9,7 +9,6 @@ let _loadedFrom: string[] = [];
 export function normalizeEnvValue(v: unknown): string {
   let s = String(v ?? '').trim();
 
-  // Strip wrapping quotes: KEY="..." or '...'
   if (
     (s.startsWith('"') && s.endsWith('"') && s.length >= 2) ||
     (s.startsWith("'") && s.endsWith("'") && s.length >= 2)
@@ -26,31 +25,20 @@ export function maskMid(value: string, head = 6, tail = 6) {
   return `${s.slice(0, head)}***${s.slice(-tail)}`;
 }
 
-/**
- * Convert something like:
- *  - ".env" / "C:\\...\\.env" -> absolute fs path
- *  - "file:///C:/.../.env" -> fs path
- *  - "file:.env" (BAD url) -> treat as ".env" path (no fileURLToPath call)
- */
 function toFsPath(input: string, cwd: string): string {
   let s = normalizeEnvValue(input);
   if (!s) return '';
 
-  // Handle file: URLs safely.
   if (s.startsWith('file:')) {
-    // Only attempt fileURLToPath when it is a real absolute file URL.
-    // file:.env is NOT absolute and will throw on Windows -> treat as path.
     if (s.startsWith('file:///') || s.startsWith('file://localhost/')) {
       try {
         return fileURLToPath(new URL(s));
       } catch {
-        // fall through to treating as path
+        // fall through
       }
     }
-
-    // Treat "file:.env" or other weird forms as a normal path
     s = s.slice('file:'.length);
-    s = s.replace(/^\/+/, ''); // avoid "///" becoming UNC-ish
+    s = s.replace(/^\/+/, '');
   }
 
   return path.isAbsolute(s) ? s : path.resolve(cwd, s);
@@ -67,19 +55,26 @@ function walkUpDirs(start: string, maxLevels = 6) {
     cur = parent;
   }
 
-  // de-dupe
   return Array.from(new Set(dirs));
 }
 
 function buildCandidates(cwd: string) {
-  const names = ['.env', '.env.local', '.env.production', '.env.production.local'];
+  // IMPORTANT: only load files that match NODE_ENV
+  // dev -> .env, .env.local, .env.development, .env.development.local
+  // prod -> .env, .env.local, .env.production, .env.production.local
+  const nodeEnv = (process.env.NODE_ENV || 'development').trim();
+  const envName = nodeEnv === 'prod' ? 'production' : nodeEnv;
 
-  // Look in cwd and parent dirs (covers cases where pm2 runs in .output/server)
+  const names = [
+    '.env',
+    '.env.local',
+    `.env.${envName}`,
+    `.env.${envName}.local`
+  ];
+
   const dirs = walkUpDirs(cwd, 7);
-
   const candidates: string[] = [];
 
-  // Optional override, but never crash if it is weird
   const raw = normalizeEnvValue(process.env.DOTENV_PATH);
   if (raw) candidates.push(toFsPath(raw, cwd));
 
@@ -87,7 +82,6 @@ function buildCandidates(cwd: string) {
     for (const n of names) candidates.push(path.resolve(dir, n));
   }
 
-  // Keep only absolute paths, de-dupe
   return Array.from(new Set(candidates)).filter((p) => !!p && path.isAbsolute(p));
 }
 
@@ -107,7 +101,6 @@ export function ensureEnvLoaded() {
       }
     }
   } catch (err: any) {
-    // HARD GUARD: never crash Nitro on env loading
     console.error(
       JSON.stringify({
         t: new Date().toISOString(),

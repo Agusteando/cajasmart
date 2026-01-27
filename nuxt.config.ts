@@ -6,7 +6,12 @@ export default defineNuxtConfig({
   },
 
   runtimeConfig: {
-    baseUrl: process.env.BASE_URL,
+    // Only pin origin in production (behind IIS/proxy).
+    // In dev, let it auto-detect from the request, or set BASE_URL_DEV=http://localhost:3000
+    baseUrl:
+      process.env.NODE_ENV === 'production'
+        ? (process.env.BASE_URL || '')
+        : (process.env.BASE_URL_DEV || ''),
 
     dbHost: process.env.DB_HOST,
     dbUser: process.env.DB_USER,

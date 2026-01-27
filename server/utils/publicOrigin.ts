@@ -7,25 +7,32 @@ function firstHeaderValue(v: any): string {
     .trim();
 }
 
+function isLocalHost(host: string) {
+  const h = (host || '').toLowerCase();
+  return (
+    h.startsWith('localhost') ||
+    h.startsWith('127.0.0.1') ||
+    h.startsWith('[::1]') ||
+    h.startsWith('::1')
+  );
+}
+
 export function getPublicOrigin(event: H3Event): string {
   const cfg = useRuntimeConfig() as any;
-
-  // If BASE_URL/runtimeConfig.baseUrl is set, always use it (best practice behind proxies)
-  const configured = String(cfg.baseUrl || '').trim();
-  if (configured) {
-    // normalize: remove trailing slash
-    return configured.replace(/\/+$/, '');
-  }
-
-  const xfProto =
-    firstHeaderValue(getRequestHeader(event, 'x-forwarded-proto')) ||
-    firstHeaderValue(getRequestHeader(event, 'x-original-proto'));
 
   const xfHost =
     firstHeaderValue(getRequestHeader(event, 'x-forwarded-host')) ||
     firstHeaderValue(getRequestHeader(event, 'x-original-host')) ||
     firstHeaderValue(getRequestHeader(event, 'host')) ||
     'localhost';
+
+  // If configured baseUrl exists, use it EXCEPT when request is clearly localhost
+  const configured = String(cfg.baseUrl || '').trim().replace(/\/+$/, '');
+  if (configured && !isLocalHost(xfHost)) return configured;
+
+  const xfProto =
+    firstHeaderValue(getRequestHeader(event, 'x-forwarded-proto')) ||
+    firstHeaderValue(getRequestHeader(event, 'x-original-proto'));
 
   const isHttps =
     xfProto === 'https' ||

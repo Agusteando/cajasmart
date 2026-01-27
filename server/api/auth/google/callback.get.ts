@@ -54,6 +54,24 @@ async function exchangeTokenWithBasic(params: {
   });
 }
 
+function firstHeaderValue(v: any): string {
+  return String(v || '')
+    .split(',')[0]
+    .trim();
+}
+
+function isRequestHttps(event: H3Event): boolean {
+  const xfProto = firstHeaderValue(getRequestHeader(event, 'x-forwarded-proto'));
+  const xOrigProto = firstHeaderValue(getRequestHeader(event, 'x-original-proto'));
+
+  return (
+    xfProto === 'https' ||
+    xOrigProto === 'https' ||
+    Boolean(getRequestHeader(event, 'x-arr-ssl')) ||
+    Boolean((event.node.req.socket as any)?.encrypted)
+  );
+}
+
 export default defineEventHandler(async (event: H3Event) => {
   ensureEnvLoaded();
   logStep(event, 'callback:hit');
@@ -89,9 +107,9 @@ export default defineEventHandler(async (event: H3Event) => {
     baseUrl,
     redirectUri,
     clientId: clientId ? maskMid(clientId) : null,
-    clientIdFrom: cfgId ? 'runtimeConfig' : (envId ? 'process.env' : 'none'),
+    clientIdFrom: cfgId ? 'runtimeConfig' : envId ? 'process.env' : 'none',
     clientSecret: clientSecret ? `***${clientSecret.slice(-6)}` : null,
-    secretFrom: cfgSecret ? 'runtimeConfig' : (envSecret ? 'process.env' : 'none'),
+    secretFrom: cfgSecret ? 'runtimeConfig' : envSecret ? 'process.env' : 'none',
     codeLen: code.length
   });
 
@@ -215,11 +233,6 @@ export default defineEventHandler(async (event: H3Event) => {
       logStep(event, 'user:update:ok', { id: user?.id, email: user?.email });
     }
 
-    const isHttps =
-      baseUrl.startsWith('https://') ||
-      Boolean(getRequestHeader(event, 'x-arr-ssl')) ||
-      String(getRequestHeader(event, 'x-forwarded-proto') || '').startsWith('https');
-
     const sessionUser = {
       id: user.id,
       nombre: user.nombre,
@@ -231,15 +244,16 @@ export default defineEventHandler(async (event: H3Event) => {
       avatar: googleUser.picture
     };
 
+    // IMPORTANT: cookie is JSON string; client must deserialize consistently
     setCookie(event, 'user', JSON.stringify(sessionUser), {
       httpOnly: false,
-      secure: isHttps,
+      secure: isRequestHttps(event), // localhost http => false, IIS https => true
       sameSite: 'lax',
       maxAge: 60 * 60 * 24 * 7,
       path: '/'
     });
 
-    logStep(event, 'cookie:set', { secure: isHttps, userId: sessionUser.id });
+    logStep(event, 'cookie:set', { secure: isRequestHttps(event), userId: sessionUser.id });
     return htmlRedirect(event, '/');
   } catch (err: any) {
     log(event, 'ERROR', 'db:flow:failed', { message: err?.message, stack: err?.stack });
