@@ -21,33 +21,41 @@ const VALID_TRANSITIONS: Record<string, Record<string, { requiredRole: string; n
   },
   APPROVED: {
     PROCESS: { requiredRole: 'TESORERIA', nextStatus: 'PROCESSED' }
-  },
-  // Allow resubmitting from RETURNED
-  RETURNED: {
-    SUBMIT: { requiredRole: 'ADMIN_PLANTEL', nextStatus: 'PENDING_OPS_REVIEW' } 
   }
 };
 
 export default defineEventHandler(async (event) => {
   const user = requireAuth(event);
   const body = await readBody<WorkflowAction>(event);
+
   const { id, action, reason, paymentRef } = body;
 
-  if (!id || !action) throw createError({ statusCode: 400, statusMessage: 'Faltan datos' });
-
-  const db = await useDb();
-  const [rows]: any = await db.execute('SELECT * FROM reimbursements WHERE id = ?', [id]);
-  if (!rows.length) throw createError({ statusCode: 404, statusMessage: 'Solicitud no encontrada' });
-
-  const item = rows[0];
-  
-  // Special case: Resubmit (handled separately or via update, but simple state change here)
-  if (item.status === 'RETURNED' && action === 'APPROVE') {
-    // If frontend sends APPROVE for a returned item by requester, map it to resubmit? 
-    // Usually resubmit is an edit. Let's assume standard flow here.
+  if (!id || !action) {
+    throw createError({ statusCode: 400, statusMessage: 'ID y acción son requeridos' });
   }
 
-  const transitions = VALID_TRANSITIONS[item.status];
+  if (action === 'RETURN' && !reason?.trim()) {
+    throw createError({ statusCode: 400, statusMessage: 'El motivo/observaciones es requerido' });
+  }
+
+  const db = await useDb();
+
+  const [rows]: any = await db.execute(
+    `SELECT r.*, u.nombre as solicitante_nombre, u.email as solicitante_email
+     FROM reimbursements r
+     JOIN users u ON r.user_id = u.id
+     WHERE r.id = ?`,
+    [id]
+  );
+
+  if (!rows.length) {
+    throw createError({ statusCode: 404, statusMessage: 'Solicitud no encontrada' });
+  }
+
+  const item = rows[0];
+  const currentStatus = String(item.status || '');
+
+  const transitions = VALID_TRANSITIONS[currentStatus];
   const transition = transitions?.[action];
 
   if (!transition) {
@@ -56,16 +64,8 @@ export default defineEventHandler(async (event) => {
 
   // Permission Check
   if (user.role_name !== 'SUPER_ADMIN' && user.role_name !== transition.requiredRole) {
-    // Special case: Requester resubmitting own item
-    if (transition.requiredRole === 'ADMIN_PLANTEL' && item.user_id !== user.id) {
-       throw createError({ statusCode: 403 });
-    }
-    if (transition.requiredRole !== 'ADMIN_PLANTEL') {
-       throw createError({ statusCode: 403 });
-    }
+    throw createError({ statusCode: 403, statusMessage: 'No autorizado' });
   }
-
-  if (action === 'RETURN' && !reason) throw createError({ statusCode: 400, statusMessage: 'Motivo requerido' });
 
   const updates: string[] = ['status = ?', 'updated_at = NOW()'];
   const params: any[] = [transition.nextStatus];
@@ -77,7 +77,7 @@ export default defineEventHandler(async (event) => {
     updates.push('processed_at = NOW()', 'processed_by = ?', 'payment_ref = ?');
     params.push(user.id, paymentRef || null);
   } else if (action === 'APPROVE') {
-    // Clear rejection info
+    // Clear rejection info when approving
     updates.push('rejection_reason = NULL', 'returned_by = NULL');
   }
 
@@ -89,36 +89,72 @@ export default defineEventHandler(async (event) => {
     entityType: 'reimbursement',
     entityId: id,
     action,
-    fromStatus: item.status,
+    fromStatus: currentStatus,
     toStatus: transition.nextStatus,
     actorUserId: user.id,
-    comment: reason || paymentRef
+    comment:
+      action === 'RETURN'
+        ? reason
+        : action === 'PROCESS' && paymentRef
+          ? `Ref: ${paymentRef}`
+          : undefined
   });
 
   // Notifications
-  const amountStr = parseFloat(item.amount).toFixed(2);
-  
-  if (action === 'RETURN') {
+  const amountStr = Number.parseFloat(item.amount || 0).toFixed(2);
+
+  if (action === 'APPROVE' && transition.nextStatus === 'PENDING_FISCAL_REVIEW') {
+    await notifyRoleUsers(
+      'REVISOR_FISCAL',
+      'NEW_PENDING',
+      'Nueva solicitud para revisión fiscal',
+      `Solicitud #${id} de $${amountStr} aprobada operativamente`,
+      'reimbursement',
+      id
+    );
+  }
+
+  if (action === 'APPROVE' && transition.nextStatus === 'APPROVED') {
+    await notifyRoleUsers(
+      'TESORERIA',
+      'APPROVED',
+      'Solicitud lista para pago',
+      `Solicitud #${id} de $${amountStr} aprobada para pago`,
+      'reimbursement',
+      id
+    );
+
     await createNotification({
       userId: item.user_id,
-      type: 'RETURNED',
-      title: 'Solicitud Devuelta',
-      message: `Tu solicitud #${id} fue devuelta: ${reason}`,
-      referenceType: 'reimbursement',
-      referenceId: id
-    });
-  } else if (transition.nextStatus === 'APPROVED') {
-    await notifyRoleUsers('TESORERIA', 'PAYMENT_READY', 'Pago Pendiente', `Solicitud #${id} ($${amountStr}) aprobada`, 'reimbursement', id);
-  } else if (transition.nextStatus === 'PROCESSED') {
-    await createNotification({
-      userId: item.user_id,
-      type: 'PAID',
-      title: 'Reembolso Pagado',
-      message: `Solicitud #${id} ha sido pagada.`,
+      type: 'APPROVED',
+      title: 'Solicitud aprobada',
+      message: `Tu solicitud #${id} de $${amountStr} ha sido aprobada y está lista para pago`,
       referenceType: 'reimbursement',
       referenceId: id
     });
   }
 
-  return { success: true };
+  if (action === 'RETURN') {
+    await createNotification({
+      userId: item.user_id,
+      type: 'RETURNED',
+      title: 'Solicitud regresada',
+      message: `Tu solicitud #${id} fue regresada. Observaciones: ${reason}`,
+      referenceType: 'reimbursement',
+      referenceId: id
+    });
+  }
+
+  if (action === 'PROCESS') {
+    await createNotification({
+      userId: item.user_id,
+      type: 'PROCESSED',
+      title: 'Reembolso procesado',
+      message: `Tu solicitud #${id} de $${amountStr} ha sido procesada${paymentRef ? ` (Ref: ${paymentRef})` : ''}`,
+      referenceType: 'reimbursement',
+      referenceId: id
+    });
+  }
+
+  return { success: true, id, newStatus: transition.nextStatus };
 });

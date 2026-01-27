@@ -1,58 +1,89 @@
 import { useDb } from '~/server/utils/db';
 import { requireAuth } from '~/server/utils/auth';
 
+const ALL_STATUSES = [
+  'DRAFT',
+  'PENDING_OPS_REVIEW',
+  'PENDING_FISCAL_REVIEW',
+  'RETURNED',
+  'APPROVED',
+  'PROCESSED'
+];
+
+const DEFAULT_STATUS_BY_ROLE: Record<string, string | null> = {
+  ADMIN_PLANTEL: null,
+  REVISOR_OPS: 'PENDING_OPS_REVIEW',
+  REVISOR_FISCAL: 'PENDING_FISCAL_REVIEW',
+  TESORERIA: 'APPROVED',
+  SUPER_ADMIN: null
+};
+
+const ALLOWED_STATUS_BY_ROLE: Record<string, string[] | 'ALL'> = {
+  ADMIN_PLANTEL: 'ALL',
+  REVISOR_OPS: ['PENDING_OPS_REVIEW'],
+  REVISOR_FISCAL: ['PENDING_FISCAL_REVIEW'],
+  TESORERIA: ['APPROVED', 'PROCESSED'],
+  SUPER_ADMIN: 'ALL'
+};
+
 export default defineEventHandler(async (event) => {
   const user = requireAuth(event);
   const query = getQuery(event);
-  const status = query.status ? String(query.status) : null;
-  
+
+  let status = query.status ? String(query.status) : null;
+
+  // Default queue per role
+  if (!status) {
+    const def = DEFAULT_STATUS_BY_ROLE[user.role_name] ?? null;
+    if (def) status = def;
+  }
+
+  // Validate status value (if provided)
+  if (status && !ALL_STATUSES.includes(status)) {
+    throw createError({ statusCode: 400, statusMessage: 'Estatus inválido' });
+  }
+
+  // Role-based restriction (prevents e.g. ADMIN_PLANTEL listing global queues)
+  const allowed = ALLOWED_STATUS_BY_ROLE[user.role_name] ?? [];
+  if (allowed !== 'ALL') {
+    if (status && !allowed.includes(status)) {
+      throw createError({ statusCode: 403, statusMessage: 'No autorizado para ver este estatus' });
+    }
+  }
+
   const db = await useDb();
-  
-  // Base query
+
   let sql = `
     SELECT 
       r.*,
       u.nombre as solicitante_nombre,
+      u.email as solicitante_email,
       p.nombre as plantel_nombre,
       p.codigo as plantel_codigo
     FROM reimbursements r
     JOIN users u ON r.user_id = u.id
     LEFT JOIN planteles p ON r.plantel_id = p.id
   `;
-  
+
   const params: any[] = [];
   const conditions: string[] = [];
-  
-  // 1. Filter by Status if provided
+
   if (status) {
     conditions.push('r.status = ?');
     params.push(status);
   }
 
-  // 2. Security Scoping based on Role
+  // Scope requesters to their own records
   if (user.role_name === 'ADMIN_PLANTEL') {
-    // Requesters see only their own branch's requests (or only their own)
-    // "Requester can create/edit... for their plantel". 
-    // We scope to plantel_id to allow seeing history of the branch if desired, 
-    // or user_id if strict. Using user_id for strict safety on "My Reimbursements".
     conditions.push('r.user_id = ?');
     params.push(user.id);
-  } 
-  else if (user.role_name === 'REVISOR_OPS') {
-    // Ops generally see Pending Ops, but if no status filter, maybe they see all?
-    // Usually they just need their queue.
-    if (!status) {
-        // If no specific filter, show them things relevant to ops + history
-        // or just everything. Let's allow everything but filtered by UI.
-    }
   }
-  // Other roles (FISCAL, TESORERIA, SUPER_ADMIN) see global list (filtered by status in UI)
 
   if (conditions.length > 0) {
     sql += ' WHERE ' + conditions.join(' AND ');
   }
-  
-  sql += ' ORDER BY r.created_at DESC LIMIT 100';
+
+  sql += ' ORDER BY r.created_at DESC LIMIT 200';
 
   const [rows] = await db.execute(sql, params);
   return rows;

@@ -11,19 +11,19 @@ export default defineEventHandler(async (event) => {
   // Scope for ADMIN_PLANTEL
   const scoped = role === 'ADMIN_PLANTEL' && Number.isFinite(plantelId);
 
-  const whereSql = scoped ? 'WHERE plantel_id = ?' : '';
+  const whereSql = scoped ? 'WHERE r.plantel_id = ?' : '';
   const whereArgs = scoped ? [plantelId] : [];
 
   const [stats]: any = await db.execute(
     `
     SELECT 
       COUNT(*) as total_count,
-      SUM(CASE WHEN estatus = 'PAGADO' THEN monto ELSE 0 END) as total_pagado,
-      SUM(CASE WHEN estatus IN ('REVISION_OPS', 'REVISION_FISCAL') THEN monto ELSE 0 END) as total_pendiente,
-      SUM(CASE WHEN estatus = 'RECHAZADO' THEN 1 ELSE 0 END) as total_rechazados
-    FROM solicitudes
+      SUM(CASE WHEN r.status IN ('PROCESSED','APPROVED') THEN CAST(r.amount AS DECIMAL(12,2)) ELSE 0 END) as total_pagado,
+      SUM(CASE WHEN r.status IN ('PENDING_OPS_REVIEW','PENDING_FISCAL_REVIEW') THEN CAST(r.amount AS DECIMAL(12,2)) ELSE 0 END) as total_pendiente,
+      SUM(CASE WHEN r.status = 'RETURNED' THEN 1 ELSE 0 END) as total_rechazados
+    FROM reimbursements r
     ${whereSql}
-  `,
+    `,
     whereArgs
   );
 
@@ -31,12 +31,13 @@ export default defineEventHandler(async (event) => {
   if (role !== 'ADMIN_PLANTEL') {
     const [rows]: any = await db.execute(
       `
-      SELECT p.nombre, SUM(s.monto) as total
-      FROM solicitudes s
-      JOIN planteles p ON s.plantel_id = p.id
-      WHERE s.estatus = 'PAGADO'
+      SELECT p.nombre, SUM(CAST(r.amount AS DECIMAL(12,2))) as total
+      FROM reimbursements r
+      JOIN planteles p ON r.plantel_id = p.id
+      WHERE r.status = 'PROCESSED'
       GROUP BY p.nombre
-    `
+      ORDER BY total DESC
+      `
     );
     byPlantel = rows;
   }

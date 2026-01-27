@@ -19,10 +19,15 @@
         <p class="px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Principal</p>
 
         <NavLink to="/" icon="HomeIcon">Dashboard</NavLink>
-        <NavLink to="/reembolsos" icon="CurrencyDollarIcon">Mis Reembolsos</NavLink>
+
+        <!-- Workspaces -->
+        <NavLink v-if="showReembolsos" to="/reembolsos" icon="CurrencyDollarIcon">Reembolsos</NavLink>
+        <NavLink v-if="showOps" to="/ops" icon="ClipboardDocumentCheckIcon">Operativo</NavLink>
+        <NavLink v-if="showFiscal" to="/fiscal" icon="ScaleIcon">Fiscal</NavLink>
+        <NavLink v-if="showTesoreria" to="/tesoreria" icon="BanknotesIcon">Tesorería</NavLink>
 
         <!-- Admin Section -->
-        <div v-if="user?.role_level > 1">
+        <div v-if="user?.role_name === 'SUPER_ADMIN'">
           <p class="px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider mt-8 mb-2">Gestión</p>
           <NavLink to="/admin/planteles" icon="BuildingOfficeIcon">Planteles</NavLink>
           <NavLink to="/admin/usuarios" icon="UsersIcon">Usuarios</NavLink>
@@ -118,6 +123,26 @@ const route = useRoute();
 const userCookie = useUserCookie();
 
 const user = computed(() => userCookie.value);
+
+const showReembolsos = computed(() => {
+  const r = user.value?.role_name;
+  return r === 'ADMIN_PLANTEL' || r === 'SUPER_ADMIN';
+});
+
+const showOps = computed(() => {
+  const r = user.value?.role_name;
+  return r === 'REVISOR_OPS' || r === 'SUPER_ADMIN';
+});
+
+const showFiscal = computed(() => {
+  const r = user.value?.role_name;
+  return r === 'REVISOR_FISCAL' || r === 'SUPER_ADMIN';
+});
+
+const showTesoreria = computed(() => {
+  const r = user.value?.role_name;
+  return r === 'TESORERIA' || r === 'SUPER_ADMIN';
+});
 
 const stopImpersonation = async () => {
   try {
