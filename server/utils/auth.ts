@@ -1,6 +1,7 @@
 import type { H3Event } from 'h3';
 import { getCookie, createError } from 'h3';
 
+// 1. Define Types
 export interface SessionUser {
   id: number;
   nombre: string;
@@ -12,36 +13,34 @@ export interface SessionUser {
   avatar?: string | null;
 }
 
-function validateUser(user: any): SessionUser | null {
-  if (!user || typeof user !== 'object') return null;
-  if (!user.id || !user.email) return null;
-  return user as SessionUser;
+// 2. Helper to safely parse the cookie JSON
+function safeParseSession(cookieValue: string): SessionUser | null {
+  try {
+    // Decode if URI encoded (common in cookies)
+    const decoded = decodeURIComponent(cookieValue);
+    // Handle potential double encoding or raw JSON
+    const jsonStr = decoded.startsWith('%') ? decodeURIComponent(decoded) : decoded;
+    
+    const user = JSON.parse(jsonStr);
+    
+    // Basic validation
+    if (!user || typeof user !== 'object' || !user.id || !user.email) {
+      return null;
+    }
+    
+    return user as SessionUser;
+  } catch (e) {
+    return null;
+  }
 }
 
 /**
- * Parse the user session from the cookie
- * Returns null if no valid session exists
+ * Parse the user session from the cookie (Safe & Robust)
  */
 export function parseUserSession(event: H3Event): SessionUser | null {
   const cookieValue = getCookie(event, 'user');
-  
-  if (!cookieValue) {
-    return null;
-  }
-
-  try {
-    // Strategy 1: Try parsing directly (in case H3 already decoded it)
-    try {
-      return validateUser(JSON.parse(cookieValue));
-    } catch {
-      // Strategy 2: Decode URI component then parse
-      const decoded = decodeURIComponent(cookieValue);
-      return validateUser(JSON.parse(decoded));
-    }
-  } catch (e) {
-    // If both fail, cookie is invalid/corrupted
-    return null;
-  }
+  if (!cookieValue) return null;
+  return safeParseSession(cookieValue);
 }
 
 /**
@@ -53,7 +52,7 @@ export function requireAuth(event: H3Event): SessionUser {
   if (!user) {
     throw createError({
       statusCode: 401,
-      statusMessage: 'Sesión expirada o inválida. Por favor inicie sesión nuevamente.'
+      statusMessage: 'Sesión expirada. Inicie sesión nuevamente.'
     });
   }
   
@@ -66,6 +65,7 @@ export function requireAuth(event: H3Event): SessionUser {
 export function requireRole(event: H3Event, allowedRoles: string[]): SessionUser {
   const user = requireAuth(event);
   
+  // Super Admin always passes
   if (user.role_name === 'SUPER_ADMIN') {
     return user;
   }
@@ -81,15 +81,17 @@ export function requireRole(event: H3Event, allowedRoles: string[]): SessionUser
 }
 
 /**
- * Check if user needs onboarding actions
+ * Logic: Does this user need onboarding?
  */
 export function needsOnboarding(user: SessionUser): boolean {
   const validRoles = ['ADMIN_PLANTEL', 'REVISOR_OPS', 'REVISOR_FISCAL', 'TESORERIA', 'SUPER_ADMIN'];
   
+  // 1. Invalid or missing role
   if (!user.role_name || !validRoles.includes(user.role_name)) {
     return true;
   }
   
+  // 2. Requester without Plantel
   if (user.role_name === 'ADMIN_PLANTEL' && !user.plantel_id) {
     return true;
   }
@@ -98,7 +100,7 @@ export function needsOnboarding(user: SessionUser): boolean {
 }
 
 /**
- * Get the appropriate home page redirect based on role
+ * Logic: Where should this user go after login?
  */
 export function getHomePageForRole(roleName: string): string {
   switch (roleName) {
@@ -111,7 +113,7 @@ export function getHomePageForRole(roleName: string): string {
     case 'TESORERIA':
       return '/tesoreria';
     case 'SUPER_ADMIN':
-      return '/';
+      return '/'; // Admin sees the KPI dashboard at /
     default:
       return '/onboarding';
   }

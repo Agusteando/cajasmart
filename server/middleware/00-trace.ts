@@ -1,12 +1,15 @@
 import { getRequestURL } from 'h3';
 import { getReqId, log, logHeaders } from '~/server/utils/log';
 
+const TRACE_HEADERS = process.env.TRACE_HEADERS === '1';
+
 function shouldSkip(path: string) {
   return (
     path.startsWith('/_nuxt/') ||
     path === '/favicon.ico' ||
     path === '/robots.txt' ||
-    path.startsWith('/uploads/')
+    path.startsWith('/uploads/') ||
+    path.startsWith('/.well-known/')
   );
 }
 
@@ -22,9 +25,13 @@ export default defineEventHandler((event) => {
   // Ensure request id is available early
   getReqId(event);
 
-  // Log request start + headers
+  // Log request start
   log(event, 'INFO', 'request:start');
-  logHeaders(event);
+
+  // Only log headers if explicitly enabled
+  if (TRACE_HEADERS) {
+    logHeaders(event);
+  }
 
   // Avoid attaching finish listener more than once
   if ((event.context as any)._traceFinishAttached) return;

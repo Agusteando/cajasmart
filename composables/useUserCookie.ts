@@ -1,4 +1,4 @@
-type SessionUser = {
+export type SessionUser = {
   id: number;
   nombre: string;
   email: string;
@@ -9,20 +9,61 @@ type SessionUser = {
   avatar?: string | null;
 };
 
-function safeParse(v: string): SessionUser | null {
-  const s = String(v || '').trim();
+function isValidSessionUser(v: any): v is SessionUser {
+  return (
+    v &&
+    typeof v === 'object' &&
+    Number.isFinite(Number(v.id)) &&
+    typeof v.email === 'string' &&
+    v.email.length > 3 &&
+    typeof v.role_name === 'string' &&
+    v.role_name.length > 0
+  );
+}
+
+function decodeMaybe(s: string): string {
+  let cur = s;
+  for (let i = 0; i < 2; i++) {
+    try {
+      const dec = decodeURIComponent(cur);
+      if (dec === cur) break;
+      cur = dec;
+    } catch {
+      break;
+    }
+  }
+  return cur;
+}
+
+function safeParseCookieValue(v: unknown): SessionUser | null {
+  if (v == null) return null;
+
+  // already an object (Nuxt default cookie parsing sometimes does this)
+  if (typeof v === 'object') return isValidSessionUser(v) ? (v as SessionUser) : null;
+
+  let s = String(v).trim();
   if (!s || s === 'null' || s === 'undefined') return null;
+
+  s = decodeMaybe(s);
+
   try {
-    return JSON.parse(s) as SessionUser;
+    const parsed = JSON.parse(s);
+    // handle double-stringified cookies: "\"{...}\""
+    if (typeof parsed === 'string') return safeParseCookieValue(parsed);
+    return isValidSessionUser(parsed) ? (parsed as SessionUser) : null;
   } catch {
     return null;
   }
 }
 
 export function useUserCookie() {
+  /**
+   * IMPORTANT:
+   * - Do NOT override serialize. Nuxt uses "null" to delete cookies correctly.
+   * - We only harden deserialize to handle encoded/double-encoded/double-stringified values.
+   */
   return useCookie<SessionUser | null>('user', {
     default: () => null,
-    deserialize: (v) => safeParse(v),
-    serialize: (v) => JSON.stringify(v ?? null)
+    deserialize: (v) => safeParseCookieValue(v)
   });
 }

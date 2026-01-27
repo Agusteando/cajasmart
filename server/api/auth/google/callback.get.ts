@@ -1,11 +1,13 @@
+// server/api/auth/google/callback.get.ts
+
 import type { H3Event } from 'h3';
-import { getRequestHeader } from 'h3';
 import { Buffer } from 'node:buffer';
 import { useDb } from '~/server/utils/db';
 import { getPublicOrigin } from '~/server/utils/publicOrigin';
 import { htmlRedirect } from '~/server/utils/htmlRedirect';
 import { log, logEnvSnapshot, logStep } from '~/server/utils/log';
 import { ensureEnvLoaded, normalizeEnvValue, maskMid } from '~/server/utils/env';
+import { setUserSessionCookie } from '~/server/utils/sessionCookie';
 
 function extractFetchError(err: any) {
   const status = err?.response?.status ?? err?.status;
@@ -52,24 +54,6 @@ async function exchangeTokenWithBasic(params: {
       grant_type: 'authorization_code'
     }).toString()
   });
-}
-
-function firstHeaderValue(v: any): string {
-  return String(v || '')
-    .split(',')[0]
-    .trim();
-}
-
-function isRequestHttps(event: H3Event): boolean {
-  const xfProto = firstHeaderValue(getRequestHeader(event, 'x-forwarded-proto'));
-  const xOrigProto = firstHeaderValue(getRequestHeader(event, 'x-original-proto'));
-
-  return (
-    xfProto === 'https' ||
-    xOrigProto === 'https' ||
-    Boolean(getRequestHeader(event, 'x-arr-ssl')) ||
-    Boolean((event.node.req.socket as any)?.encrypted)
-  );
 }
 
 export default defineEventHandler(async (event: H3Event) => {
@@ -119,8 +103,8 @@ export default defineEventHandler(async (event: H3Event) => {
     return htmlRedirect(event, '/login?error=oauth_client');
   }
 
+  // 1) Exchange code -> token
   let token: any;
-
   try {
     logStep(event, 'token:exchange:body:start');
     token = await exchangeTokenWithBody({ code, clientId, clientSecret, redirectUri });
@@ -138,6 +122,7 @@ export default defineEventHandler(async (event: H3Event) => {
       clientSecret: `***${clientSecret.slice(-6)}`
     });
 
+    // Retry using HTTP Basic only when Google says invalid_client
     if (e.status === 401 && googleErr === 'invalid_client') {
       try {
         logStep(event, 'token:exchange:basic:retry:start');
@@ -160,7 +145,7 @@ export default defineEventHandler(async (event: H3Event) => {
     }
   }
 
-  // userinfo
+  // 2) Fetch userinfo
   let googleUser: any;
   try {
     logStep(event, 'userinfo:fetch:start');
@@ -174,7 +159,7 @@ export default defineEventHandler(async (event: H3Event) => {
     return htmlRedirect(event, '/login?error=server_error');
   }
 
-  // DB + cookie
+  // 3) DB lookup/upsert + set cookie
   try {
     logStep(event, 'db:connect:start');
     const db = await useDb();
@@ -244,16 +229,10 @@ export default defineEventHandler(async (event: H3Event) => {
       avatar: googleUser.picture
     };
 
-    // IMPORTANT: cookie is JSON string; client must deserialize consistently
-    setCookie(event, 'user', JSON.stringify(sessionUser), {
-      httpOnly: false,
-      secure: isRequestHttps(event), // localhost http => false, IIS https => true
-      sameSite: 'lax',
-      maxAge: 60 * 60 * 24 * 7,
-      path: '/'
-    });
+    // ✅ Localhost-safe cookie: secure=false on localhost, otherwise based on https
+    const { host, secure } = setUserSessionCookie(event, sessionUser);
 
-    logStep(event, 'cookie:set', { secure: isRequestHttps(event), userId: sessionUser.id });
+    logStep(event, 'cookie:set', { secure, host, userId: sessionUser.id });
     return htmlRedirect(event, '/');
   } catch (err: any) {
     log(event, 'ERROR', 'db:flow:failed', { message: err?.message, stack: err?.stack });

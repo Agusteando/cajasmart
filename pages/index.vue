@@ -1,3 +1,60 @@
+<script setup lang="ts">
+import { 
+  DocumentTextIcon, 
+  BanknotesIcon, 
+  ClockIcon, 
+  XCircleIcon, 
+  ChartBarIcon,
+  UserGroupIcon,
+  BuildingOfficeIcon
+} from '@heroicons/vue/24/outline';
+
+// PROTECT THIS PAGE ON SERVER SIDE
+definePageMeta({ middleware: 'auth' });
+
+const loading = ref(true);
+const kpi = ref<any>({});
+const charts = ref<any[]>([]);
+
+const formatMoney = (val: any) => Number(val || 0).toLocaleString('es-MX');
+
+const calculatePercent = (val: number) => {
+  if (!charts.value.length) return 0;
+  const max = Math.max(...charts.value.map(c => Number(c.total)));
+  return max ? (Number(val) / max) * 100 : 0;
+};
+
+onMounted(async () => {
+  try {
+    // 1. Check if user needs onboarding or redirection
+    const status = await $fetch('/api/onboarding/status');
+
+    if (status.requiresOnboarding) {
+      return navigateTo('/onboarding');
+    }
+
+    // 2. Dispatch to Role-Specific Dashboard
+    // If user is NOT Super Admin, they shouldn't be on '/', send them to their workspace
+    if (status.user.role_name !== 'SUPER_ADMIN') {
+      const target = status.homePage || '/reembolsos';
+      if (target !== '/') {
+        return navigateTo(target);
+      }
+    }
+
+    // 3. Load KPI Data (Only reaches here if Super Admin)
+    const data = await $fetch('/api/kpi');
+    kpi.value = data.global;
+    charts.value = data.charts;
+
+  } catch (error) {
+    console.error('Dashboard Error:', error);
+  } finally {
+    loading.value = false;
+  }
+});
+</script>
+
 <template>
   <div>
     <!-- Loading Screen -->
@@ -81,10 +138,7 @@
                 <span class="font-bold text-slate-900">${{ formatMoney(c.total) }}</span>
               </div>
               <div class="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
-                <div 
-                  class="bg-indigo-600 h-2.5 rounded-full transition-all duration-1000 ease-out group-hover:bg-indigo-500" 
-                  :style="{ width: calculatePercent(c.total) + '%' }"
-                ></div>
+                <div class="bg-indigo-600 h-2.5 rounded-full transition-all duration-1000 ease-out group-hover:bg-indigo-500" :style="{ width: calculatePercent(c.total) + '%' }"></div>
               </div>
             </div>
           </div>
@@ -118,63 +172,6 @@
     </div>
   </div>
 </template>
-
-<script setup lang="ts">
-import { 
-  DocumentTextIcon, 
-  BanknotesIcon, 
-  ClockIcon, 
-  XCircleIcon, 
-  ChartBarIcon,
-  UserGroupIcon,
-  BuildingOfficeIcon
-} from '@heroicons/vue/24/outline';
-
-definePageMeta({ middleware: 'auth' });
-
-const loading = ref(true);
-const kpi = ref<any>({});
-const charts = ref<any[]>([]);
-
-const formatMoney = (val: any) => Number(val || 0).toLocaleString('es-MX');
-
-const calculatePercent = (val: number) => {
-  if (!charts.value.length) return 0;
-  const max = Math.max(...charts.value.map(c => Number(c.total)));
-  return max ? (Number(val) / max) * 100 : 0;
-};
-
-onMounted(async () => {
-  try {
-    // 1. Check if user needs onboarding or redirection
-    const status = await $fetch('/api/onboarding/status');
-
-    if (status.requiresOnboarding) {
-      return navigateTo('/onboarding');
-    }
-
-    // 2. Dispatch to Role-Specific Dashboard
-    // If user is NOT Super Admin, they shouldn't be on '/', send them to their workspace
-    if (status.user.role_name !== 'SUPER_ADMIN') {
-      const target = status.homePage || '/reembolsos';
-      if (target !== '/') {
-        return navigateTo(target);
-      }
-    }
-
-    // 3. Load KPI Data (Only reaches here if Super Admin)
-    const data = await $fetch('/api/kpi');
-    kpi.value = data.global;
-    charts.value = data.charts;
-
-  } catch (error) {
-    console.error('Dashboard Error:', error);
-  } finally {
-    // Small delay to prevent flicker if redirecting fast
-    setTimeout(() => { loading.value = false; }, 300);
-  }
-});
-</script>
 
 <style scoped>
 .animate-fade-in {

@@ -1,9 +1,8 @@
-export default defineNuxtRouteMiddleware((to, from) => {
-  // Use the same cookie name as the server ('user')
-  const user = useCookie('user');
+export default defineNuxtRouteMiddleware(() => {
+  const user = useUserCookie().value;
 
-  // If the user cookie doesn't exist or is null, redirect to login
-  if (!user.value) {
-    return navigateTo('/login');
+  // Must be a VALID session user (not just "cookie exists")
+  if (!user) {
+    return navigateTo('/login', { replace: true });
   }
 });

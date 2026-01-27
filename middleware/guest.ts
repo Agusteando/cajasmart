@@ -1,8 +1,8 @@
-export default defineNuxtRouteMiddleware((to, from) => {
-  const user = useCookie('user');
+export default defineNuxtRouteMiddleware(() => {
+  const user = useUserCookie().value;
 
-  // If user is already logged in, send them to the home/dashboard
-  if (user.value) {
-    return navigateTo('/');
+  // Only redirect if session is valid
+  if (user) {
+    return navigateTo('/', { replace: true });
   }
 });
