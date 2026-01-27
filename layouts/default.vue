@@ -5,7 +5,11 @@
       <!-- Brand Header -->
       <div class="h-20 flex items-center px-8 border-b border-slate-800">
         <div class="flex items-center gap-3">
-          <div class="w-8 h-8 rounded-lg bg-indigo-500 flex items-center justify-center font-bold text-lg text-white shadow-lg shadow-indigo-500/50">C</div>
+          <div
+            class="w-8 h-8 rounded-lg bg-indigo-500 flex items-center justify-center font-bold text-lg text-white shadow-lg shadow-indigo-500/50"
+          >
+            C
+          </div>
           <span class="text-xl font-bold tracking-tight">CajaSmart</span>
         </div>
       </div>
@@ -17,7 +21,7 @@
         <NavLink to="/" icon="HomeIcon">Dashboard</NavLink>
         <NavLink to="/reembolsos" icon="CurrencyDollarIcon">Mis Reembolsos</NavLink>
 
-        <!-- Admin Section (Only shows if user has permission level > 1) -->
+        <!-- Admin Section -->
         <div v-if="user?.role_level > 1">
           <p class="px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider mt-8 mb-2">Gestión</p>
           <NavLink to="/admin/planteles" icon="BuildingOfficeIcon">Planteles</NavLink>
@@ -26,10 +30,31 @@
         </div>
       </nav>
 
-      <!-- User Profile & Logout (Bottom Section) -->
-      <div class="p-6 border-t border-slate-800 bg-slate-900">
+      <!-- User Profile & Logout -->
+      <div class="p-6 border-t border-slate-800 bg-slate-900 space-y-4">
+        <!-- Impersonation banner -->
+        <div
+          v-if="user?.is_impersonating"
+          class="rounded-xl border border-amber-400/30 bg-amber-500/10 px-3 py-2"
+        >
+          <div class="text-[11px] uppercase tracking-wider text-amber-200 font-semibold">
+            Impersonando
+          </div>
+          <div class="text-sm font-bold text-amber-100">
+            {{ user.role_name }}
+            <span class="text-amber-200/80 font-semibold">
+              · {{ user.plantel_nombre || 'Corporativo Global' }}
+            </span>
+          </div>
+          <button
+            @click="stopImpersonation"
+            class="mt-2 w-full text-xs font-semibold bg-amber-500/20 hover:bg-amber-500/30 text-amber-100 rounded-lg py-2 transition"
+          >
+            Detener impersonación
+          </button>
+        </div>
+
         <div class="flex items-center gap-3">
-          <!-- Logic: Show Google Avatar if exists, otherwise show Initials -->
           <img
             v-if="user?.avatar"
             :src="user.avatar"
@@ -52,7 +77,7 @@
 
         <button
           @click="logout"
-          class="mt-4 w-full flex items-center justify-center gap-2 text-xs font-medium text-slate-400 hover:text-white hover:bg-slate-800 py-2 rounded transition-colors"
+          class="w-full flex items-center justify-center gap-2 text-xs font-medium text-slate-400 hover:text-white hover:bg-slate-800 py-2 rounded transition-colors"
         >
           <ArrowLeftStartOnRectangleIcon class="w-4 h-4" /> Cerrar Sesión
         </button>
@@ -62,18 +87,22 @@
     <!-- Main Content Area -->
     <main class="flex-1 flex flex-col min-w-0 overflow-hidden relative">
       <!-- Top Header -->
-      <header class="h-20 bg-white border-b border-slate-200 flex items-center justify-between px-8 sticky top-0 z-10">
-        <h2 class="text-2xl font-semibold text-slate-800 capitalize tracking-tight">{{ route.meta.title || route.name }}</h2>
+      <header
+        class="h-20 bg-white border-b border-slate-200 flex items-center justify-between px-8 sticky top-0 z-10"
+      >
+        <h2 class="text-2xl font-semibold text-slate-800 capitalize tracking-tight">
+          {{ route.meta.title || route.name }}
+        </h2>
         <div class="flex items-center gap-4">
-          <!-- Branch Badge -->
-          <span class="px-3 py-1 bg-indigo-50 text-indigo-700 text-xs font-bold rounded-full border border-indigo-100 flex items-center gap-2">
+          <span
+            class="px-3 py-1 bg-indigo-50 text-indigo-700 text-xs font-bold rounded-full border border-indigo-100 flex items-center gap-2"
+          >
             <span class="w-2 h-2 rounded-full bg-indigo-500 animate-pulse"></span>
             {{ user?.plantel_nombre || 'Corporativo Global' }}
           </span>
         </div>
       </header>
 
-      <!-- Scrollable Content Slot -->
       <div class="flex-1 overflow-auto p-8 bg-slate-50">
         <slot />
       </div>
@@ -83,40 +112,21 @@
 
 <script setup lang="ts">
 import { ArrowLeftStartOnRectangleIcon } from '@heroicons/vue/24/outline';
-
-type SessionUser = {
-  id: number;
-  nombre: string;
-  email: string;
-  role_name: string;
-  role_level: number;
-  plantel_id: number | null;
-  plantel_nombre: string;
-  avatar?: string | null;
-};
-
-function safeParse(v: any): SessionUser | null {
-  const s = String(v ?? '').trim();
-  if (!s || s === 'null' || s === 'undefined') return null;
-  try {
-    return JSON.parse(s) as SessionUser;
-  } catch {
-    return null;
-  }
-}
-
-const userCookie = useCookie<SessionUser | string | null>('user', {
-  default: () => null
-});
-
-const user = computed<SessionUser | null>(() => {
-  const v = userCookie.value as any;
-  if (!v) return null;
-  if (typeof v === 'object') return v as SessionUser; // in case it was set client-side as object
-  return safeParse(v);
-});
+import { useUserCookie } from '~/composables/useUserCookie';
 
 const route = useRoute();
+const userCookie = useUserCookie();
+
+const user = computed(() => userCookie.value);
+
+const stopImpersonation = async () => {
+  try {
+    const res: any = await $fetch('/api/admin/impersonate/stop', { method: 'POST' });
+    if (res?.user) userCookie.value = res.user;
+  } catch (e: any) {
+    alert(e?.data?.statusMessage || 'No se pudo detener la impersonación');
+  }
+};
 
 const logout = () => {
   userCookie.value = null;

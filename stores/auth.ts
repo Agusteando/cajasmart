@@ -12,9 +12,12 @@ export const useAuthStore = defineStore('auth', {
     },
     logout() {
       this.user = null;
-      // This will DELETE the cookie correctly now (because we did not override serialize)
       useUserCookie().value = null;
       navigateTo('/login', { replace: true });
+    },
+    async stopImpersonation() {
+      const res: any = await $fetch('/api/admin/impersonate/stop', { method: 'POST' });
+      if (res?.user) this.setUser(res.user);
     }
   }
 });

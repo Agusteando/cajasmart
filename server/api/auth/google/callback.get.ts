@@ -56,6 +56,49 @@ async function exchangeTokenWithBasic(params: {
   });
 }
 
+async function getRoleRowByName(db: any, roleName: string) {
+  const [rows]: any = await db.execute(
+    `SELECT id, nombre, nivel_permiso FROM roles WHERE nombre = ? LIMIT 1`,
+    [roleName]
+  );
+  return rows?.[0] || null;
+}
+
+async function getHighestRole(db: any) {
+  const [rows]: any = await db.execute(
+    `SELECT id, nombre, nivel_permiso FROM roles ORDER BY nivel_permiso DESC LIMIT 1`
+  );
+  return rows?.[0] || null;
+}
+
+async function getDefaultRole(db: any) {
+  const [rows]: any = await db.execute(
+    `SELECT id, nombre, nivel_permiso FROM roles WHERE nivel_permiso = 1 LIMIT 1`
+  );
+  return rows?.[0] || null;
+}
+
+async function countUsers(db: any): Promise<number> {
+  const [rows]: any = await db.execute(`SELECT COUNT(*) as c FROM users`);
+  return Number(rows?.[0]?.c || 0);
+}
+
+async function countSuperAdmins(db: any): Promise<number> {
+  const [rows]: any = await db.execute(
+    `SELECT COUNT(*) as c
+     FROM users u
+     JOIN roles r ON u.role_id = r.id
+     WHERE r.nombre = 'SUPER_ADMIN'`
+  );
+  return Number(rows?.[0]?.c || 0);
+}
+
+async function getFirstUserId(db: any): Promise<number | null> {
+  const [rows]: any = await db.execute(`SELECT id FROM users ORDER BY id ASC LIMIT 1`);
+  const id = rows?.[0]?.id;
+  return id ? Number(id) : null;
+}
+
 export default defineEventHandler(async (event: H3Event) => {
   ensureEnvLoaded();
   logStep(event, 'callback:hit');
@@ -122,7 +165,6 @@ export default defineEventHandler(async (event: H3Event) => {
       clientSecret: `***${clientSecret.slice(-6)}`
     });
 
-    // Retry using HTTP Basic only when Google says invalid_client
     if (e.status === 401 && googleErr === 'invalid_client') {
       try {
         logStep(event, 'token:exchange:basic:retry:start');
@@ -165,36 +207,53 @@ export default defineEventHandler(async (event: H3Event) => {
     const db = await useDb();
     logStep(event, 'db:connect:ok');
 
+    const email = String(googleUser.email || '').toLowerCase();
+    const domain = email.split('@')[1] || '';
+    const allowedDomains = ['casitaiedis.edu.mx', 'iedis.edu.mx', 'gmail.com'];
+
+    if (!allowedDomains.includes(domain)) {
+      log(event, 'WARN', 'unauthorized domain', { domain, email });
+      return htmlRedirect(event, '/login?error=unauthorized_domain');
+    }
+
+    // Role lookup (robust)
+    const superRole =
+      (await getRoleRowByName(db, 'SUPER_ADMIN')) || (await getHighestRole(db));
+    const defaultRole =
+      (await getDefaultRole(db)) ||
+      (await getRoleRowByName(db, 'ADMIN_PLANTEL')) ||
+      (await getHighestRole(db));
+
+    if (!superRole || !defaultRole) {
+      log(event, 'ERROR', 'roles missing / cannot bootstrap', { hasSuperRole: !!superRole, hasDefaultRole: !!defaultRole });
+      return htmlRedirect(event, '/login?error=server_error');
+    }
+
+    const googleId = googleUser.sub || googleUser.id;
+    const picture = googleUser.picture || null;
+    const name = googleUser.name || email;
+
+    // Find user
     const [rows]: any = await db.execute(
       `SELECT u.*, p.nombre as plantel_nombre, r.nombre as role_name, r.nivel_permiso
        FROM users u
        LEFT JOIN planteles p ON u.plantel_id = p.id
        JOIN roles r ON u.role_id = r.id
        WHERE u.email = ?`,
-      [googleUser.email]
+      [email]
     );
 
-    let user = rows[0];
+    let user = rows?.[0] || null;
 
     if (!user) {
-      const email = String(googleUser.email).toLowerCase();
-      const domain = email.split('@')[1] || '';
-      const allowedDomains = ['casitaiedis.edu.mx', 'iedis.edu.mx', 'gmail.com'];
-
-      if (!allowedDomains.includes(domain)) {
-        log(event, 'WARN', 'unauthorized domain', { domain, email });
-        return htmlRedirect(event, '/login?error=unauthorized_domain');
-      }
-
-      const [roles]: any = await db.execute('SELECT id FROM roles WHERE nivel_permiso = 1 LIMIT 1');
-      const defaultRoleId = roles?.[0]?.id ?? 2;
-
-      const googleId = googleUser.sub || googleUser.id;
+      // ✅ Bootstrap: first-ever user becomes SUPER_ADMIN
+      const total = await countUsers(db);
+      const roleIdToUse = total === 0 ? superRole.id : defaultRole.id;
 
       const [res]: any = await db.execute(
         `INSERT INTO users (nombre, email, google_id, avatar_url, role_id, activo)
          VALUES (?, ?, ?, ?, ?, 1)`,
-        [googleUser.name, email, googleId, googleUser.picture, defaultRoleId]
+        [name, email, googleId, picture, roleIdToUse]
       );
 
       const [newRows]: any = await db.execute(
@@ -206,16 +265,42 @@ export default defineEventHandler(async (event: H3Event) => {
         [res.insertId]
       );
 
-      user = newRows[0];
-      logStep(event, 'user:create:ok', { id: user?.id, email: user?.email });
+      user = newRows?.[0] || null;
+      logStep(event, 'user:create:ok', { id: user?.id, email: user?.email, bootstrapped: total === 0 });
     } else {
-      const googleId = googleUser.sub || googleUser.id;
+      // Update Google fields
       await db.execute('UPDATE users SET google_id = ?, avatar_url = ? WHERE id = ?', [
         googleId,
-        googleUser.picture,
+        picture,
         user.id
       ]);
       logStep(event, 'user:update:ok', { id: user?.id, email: user?.email });
+
+      // ✅ Repair mode: if NO SUPER_ADMIN exists, promote the first user (old bug recovery)
+      const superCount = await countSuperAdmins(db);
+      if (superCount === 0) {
+        const firstId = await getFirstUserId(db);
+        if (firstId && Number(firstId) === Number(user.id)) {
+          await db.execute('UPDATE users SET role_id = ? WHERE id = ?', [superRole.id, user.id]);
+
+          const [fixedRows]: any = await db.execute(
+            `SELECT u.*, p.nombre as plantel_nombre, r.nombre as role_name, r.nivel_permiso
+             FROM users u
+             LEFT JOIN planteles p ON u.plantel_id = p.id
+             JOIN roles r ON u.role_id = r.id
+             WHERE u.id = ?`,
+            [user.id]
+          );
+
+          user = fixedRows?.[0] || user;
+          logStep(event, 'bootstrap:repair:promoted_first_user', { userId: user?.id });
+        }
+      }
+    }
+
+    if (!user) {
+      log(event, 'ERROR', 'user missing after upsert');
+      return htmlRedirect(event, '/login?error=server_error');
     }
 
     const sessionUser = {
@@ -226,13 +311,12 @@ export default defineEventHandler(async (event: H3Event) => {
       role_level: user.nivel_permiso,
       plantel_id: user.plantel_id || null,
       plantel_nombre: user.plantel_nombre || 'Sin Asignar',
-      avatar: googleUser.picture
+      avatar: picture
     };
 
-    // ✅ Localhost-safe cookie: secure=false on localhost, otherwise based on https
     const { host, secure } = setUserSessionCookie(event, sessionUser);
-
     logStep(event, 'cookie:set', { secure, host, userId: sessionUser.id });
+
     return htmlRedirect(event, '/');
   } catch (err: any) {
     log(event, 'ERROR', 'db:flow:failed', { message: err?.message, stack: err?.stack });

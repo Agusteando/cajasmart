@@ -1,6 +1,10 @@
 import { useDb } from '~/server/utils/db';
+import { requireSuperAdminReal } from '~/server/utils/auth';
 
 export default defineEventHandler(async (event) => {
+  // ✅ Admin-only (real SUPER_ADMIN, even if impersonating)
+  requireSuperAdminReal(event);
+
   const entity = event.context.params?.entity;
   const method = event.node.req.method;
 

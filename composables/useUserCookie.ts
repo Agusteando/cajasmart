@@ -7,6 +7,19 @@ export type SessionUser = {
   plantel_id: number | null;
   plantel_nombre: string;
   avatar?: string | null;
+
+  // --- Impersonation metadata (optional) ---
+  is_impersonating?: boolean;
+  impersonated_at?: string;
+
+  impersonator_user_id?: number;
+  impersonator_nombre?: string;
+  impersonator_email?: string;
+  impersonator_role_name?: string;
+  impersonator_role_level?: number;
+  impersonator_plantel_id?: number | null;
+  impersonator_plantel_nombre?: string;
+  impersonator_avatar?: string | null;
 };
 
 function isValidSessionUser(v: any): v is SessionUser {
@@ -38,7 +51,6 @@ function decodeMaybe(s: string): string {
 function safeParseCookieValue(v: unknown): SessionUser | null {
   if (v == null) return null;
 
-  // already an object (Nuxt default cookie parsing sometimes does this)
   if (typeof v === 'object') return isValidSessionUser(v) ? (v as SessionUser) : null;
 
   let s = String(v).trim();
@@ -48,7 +60,6 @@ function safeParseCookieValue(v: unknown): SessionUser | null {
 
   try {
     const parsed = JSON.parse(s);
-    // handle double-stringified cookies: "\"{...}\""
     if (typeof parsed === 'string') return safeParseCookieValue(parsed);
     return isValidSessionUser(parsed) ? (parsed as SessionUser) : null;
   } catch {
