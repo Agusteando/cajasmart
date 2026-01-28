@@ -3,7 +3,7 @@
     <div class="flex justify-between items-center mb-6">
       <div>
         <h2 class="text-2xl font-bold text-slate-800">Revisión Fiscal</h2>
-        <p class="text-slate-500 text-sm mt-1">Valida conceptos y justificación fiscal</p>
+        <p class="text-slate-500 text-sm mt-1">Valida conceptos y justificación fiscal (por reembolso)</p>
       </div>
       <div class="flex items-center gap-4">
         <span class="text-sm text-slate-500">
@@ -12,14 +12,12 @@
       </div>
     </div>
 
-    <!-- Empty State -->
     <div v-if="!loading && items.length === 0" class="bg-white rounded-2xl shadow-sm p-12 text-center">
       <CheckCircleIcon class="w-16 h-16 text-emerald-400 mx-auto mb-4" />
       <h3 class="text-xl font-semibold text-slate-700 mb-2">Sin pendientes</h3>
       <p class="text-slate-500">No hay solicitudes en revisión fiscal.</p>
     </div>
 
-    <!-- Items Grid -->
     <div v-else class="grid gap-4">
       <div
         v-for="item in items"
@@ -27,35 +25,59 @@
         class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden hover:shadow-md transition"
       >
         <div class="flex">
-          <!-- Left: Details -->
           <div class="flex-1 p-6">
             <div class="flex items-start justify-between mb-4">
               <div>
-                <h3 class="font-bold text-lg text-slate-800">{{ item.concept }}</h3>
-                <p class="text-slate-500 text-sm">{{ item.provider }} · {{ item.invoice_number }}</p>
+                <h3 class="font-bold text-lg text-slate-800">
+                  {{ item.folio }} · {{ item.plantel || '—' }}
+                </h3>
+                <p class="text-slate-500 text-sm">
+                  Admin: {{ item.solicitante || '—' }} · Fecha: {{ formatDate(item.fechaISO) }}
+                </p>
+                <p v-if="item.notas" class="text-slate-600 text-sm mt-2 bg-slate-50 p-3 rounded-lg">
+                  <span class="font-semibold">Notas:</span> {{ item.notas }}
+                </p>
               </div>
+
               <div class="text-right">
-                <p class="text-2xl font-bold text-slate-800">${{ formatAmount(item.amount) }}</p>
-                <p class="text-xs text-slate-500">{{ formatDate(item.invoice_date) }}</p>
+                <p class="text-2xl font-bold text-slate-800">${{ formatAmount(item.total) }}</p>
+                <p class="text-xs text-slate-500">{{ item.conceptos?.length || 0 }} concepto(s)</p>
               </div>
             </div>
 
-            <div class="flex items-center gap-6 text-sm text-slate-600 mb-4">
-              <div class="flex items-center gap-2">
-                <BuildingOfficeIcon class="w-4 h-4 text-slate-400" />
-                {{ item.plantel_nombre || '—' }}
-              </div>
-              <div class="flex items-center gap-2">
-                <UserIcon class="w-4 h-4 text-slate-400" />
-                {{ item.solicitante_nombre || '—' }}
-              </div>
+            <div class="overflow-x-auto border border-slate-200 rounded-xl">
+              <table class="w-full text-sm">
+                <thead class="bg-slate-50 text-slate-600">
+                  <tr class="text-left">
+                    <th class="px-3 py-2 font-bold">Fecha</th>
+                    <th class="px-3 py-2 font-bold">Factura</th>
+                    <th class="px-3 py-2 font-bold">Proveedor</th>
+                    <th class="px-3 py-2 font-bold">Concepto</th>
+                    <th class="px-3 py-2 font-bold">Descripción</th>
+                    <th class="px-3 py-2 font-bold text-right">Monto</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="c in item.conceptos" :key="c.id" class="border-t border-slate-100">
+                    <td class="px-3 py-2 whitespace-nowrap">{{ c.invoice_date || '—' }}</td>
+                    <td class="px-3 py-2 whitespace-nowrap">{{ c.invoice_number || '—' }}</td>
+                    <td class="px-3 py-2">{{ c.provider || '—' }}</td>
+                    <td class="px-3 py-2">{{ c.concept || '—' }}</td>
+                    <td class="px-3 py-2 text-slate-600">{{ c.description || '—' }}</td>
+                    <td class="px-3 py-2 text-right font-mono font-bold">${{ formatAmount(c.amount) }}</td>
+                  </tr>
+                </tbody>
+                <tfoot class="bg-slate-50 border-t border-slate-200">
+                  <tr>
+                    <td colspan="5" class="px-3 py-2 text-right font-bold text-slate-700">Total</td>
+                    <td class="px-3 py-2 text-right font-mono font-black text-slate-900">
+                      ${{ formatAmount(item.total) }}
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
             </div>
 
-            <p v-if="item.description" class="text-sm text-slate-600 bg-slate-50 p-3 rounded-lg">
-              {{ item.description }}
-            </p>
-
-            <!-- Actions -->
             <div class="flex items-center gap-3 mt-4 pt-4 border-t border-slate-100">
               <button
                 @click="approve(item)"
@@ -76,9 +98,8 @@
             </div>
           </div>
 
-          <!-- Right: File Preview -->
           <div class="w-64 bg-slate-100 border-l border-slate-200 p-4">
-            <p class="text-xs font-medium text-slate-500 uppercase mb-2">Factura</p>
+            <p class="text-xs font-medium text-slate-500 uppercase mb-2">Evidencia</p>
             <a
               v-if="item.file_url"
               :href="`/uploads/${item.file_url}`"
@@ -97,7 +118,6 @@
       </div>
     </div>
 
-    <!-- Reject Modal -->
     <Teleport to="body">
       <div v-if="showRejectModal" class="fixed inset-0 z-50 flex items-center justify-center p-4">
         <div class="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" @click="showRejectModal = false"></div>
@@ -107,7 +127,7 @@
           </div>
           <div class="p-6 space-y-4">
             <p class="text-slate-600">
-              Se regresará a <strong>{{ selectedItem?.solicitante_nombre }}</strong> con observaciones.
+              Se regresará a <strong>{{ selectedItem?.solicitante }}</strong> con observaciones.
             </p>
             <div>
               <label class="block text-sm font-medium text-slate-700 mb-2">Observaciones *</label>
@@ -145,83 +165,86 @@ import {
   CheckCircleIcon,
   CheckIcon,
   XMarkIcon,
-  BuildingOfficeIcon,
-  UserIcon,
   DocumentIcon,
   ExclamationTriangleIcon
-} from '@heroicons/vue/24/outline';
+} from '@heroicons/vue/24/outline'
 
-definePageMeta({ middleware: 'auth' });
+import type { Reembolso } from '~/types/reembolso'
 
-const items = ref<any[]>([]);
-const loading = ref(true);
-const showRejectModal = ref(false);
-const selectedItem = ref<any>(null);
-const rejectReason = ref('');
-const processing = ref(false);
+definePageMeta({ middleware: 'auth' })
 
-const formatDate = (dateStr: string) => new Date(dateStr).toLocaleDateString('es-MX');
+const items = ref<Reembolso[]>([])
+const loading = ref(true)
+const showRejectModal = ref(false)
+const selectedItem = ref<Reembolso | null>(null)
+const rejectReason = ref('')
+const processing = ref(false)
+
+const formatDate = (dateStr: string) => {
+  try { return new Date(dateStr).toLocaleDateString('es-MX') } catch { return dateStr }
+}
 
 const formatAmount = (amount: any) =>
-  parseFloat(amount || 0).toLocaleString('es-MX', { minimumFractionDigits: 2 });
+  parseFloat(amount || 0).toLocaleString('es-MX', { minimumFractionDigits: 2 })
 
 const fetchItems = async () => {
-  loading.value = true;
+  loading.value = true
   try {
-    items.value = await $fetch('/api/reimbursements', {
-      params: { status: 'PENDING_FISCAL_REVIEW' }
-    });
+    const res = await $fetch<{ items: Reembolso[] }>('/api/reembolsos', {
+      params: { estado: 'en_revision' }
+    })
+    items.value = res.items || []
   } catch (error) {
-    console.error('Error:', error);
+    console.error('Error:', error)
   } finally {
-    loading.value = false;
+    loading.value = false
   }
-};
+}
 
-const approve = async (item: any) => {
-  if (!confirm(`¿Aprobar fiscalmente $${formatAmount(item.amount)}?\n\nSe enviará a Tesorería.`)) return;
+const approve = async (item: Reembolso) => {
+  if (!confirm(`¿Aprobar fiscalmente ${item.folio} por $${formatAmount(item.total)}?\n\nSe enviará a Tesorería.`)) return
 
-  processing.value = true;
+  processing.value = true
   try {
-    await $fetch('/api/reimbursements/action', {
+    await $fetch('/api/reembolsos/action', {
       method: 'POST',
       body: { id: item.id, action: 'APPROVE' }
-    });
-    await fetchItems();
+    })
+    await fetchItems()
   } catch (error: any) {
-    alert(error.data?.statusMessage || 'Error al aprobar');
+    alert(error.data?.statusMessage || 'Error al aprobar')
   } finally {
-    processing.value = false;
+    processing.value = false
   }
-};
+}
 
-const openRejectModal = (item: any) => {
-  selectedItem.value = item;
-  rejectReason.value = '';
-  showRejectModal.value = true;
-};
+const openRejectModal = (item: Reembolso) => {
+  selectedItem.value = item
+  rejectReason.value = ''
+  showRejectModal.value = true
+}
 
 const confirmReject = async () => {
-  if (!rejectReason.value.trim()) return;
+  if (!rejectReason.value.trim() || !selectedItem.value) return
 
-  processing.value = true;
+  processing.value = true
   try {
-    await $fetch('/api/reimbursements/action', {
+    await $fetch('/api/reembolsos/action', {
       method: 'POST',
       body: {
         id: selectedItem.value.id,
         action: 'RETURN',
         reason: rejectReason.value
       }
-    });
-    showRejectModal.value = false;
-    await fetchItems();
+    })
+    showRejectModal.value = false
+    await fetchItems()
   } catch (error: any) {
-    alert(error.data?.statusMessage || 'Error al regresar');
+    alert(error.data?.statusMessage || 'Error al regresar')
   } finally {
-    processing.value = false;
+    processing.value = false
   }
-};
+}
 
-onMounted(fetchItems);
+onMounted(fetchItems)
 </script>
