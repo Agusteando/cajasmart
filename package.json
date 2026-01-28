@@ -12,9 +12,11 @@
   "dependencies": {
     "@heroicons/vue": "^2.2.0",
     "@pinia/nuxt": "^0.11.3",
+    "@zxing/browser": "^0.1.5",
     "dotenv": "^17.2.3",
     "mysql2": "^3.16.1",
     "nuxt": "3.17.5",
+    "qrcode": "^1.5.4",
     "web-push": "^3.6.7"
   },
   "devDependencies": {

@@ -1,241 +1,332 @@
+<!-- pages/reembolsos/index.vue -->
 <template>
-  <div>
-    <div class="flex justify-between items-center mb-6">
+  <div class="p-6 space-y-6">
+    <div class="flex items-start justify-between gap-4">
       <div>
-        <h2 class="text-2xl font-bold text-slate-800">Solicitudes de Reembolso</h2>
-        <p class="text-slate-500 text-sm mt-1">Crea, corrige y da seguimiento a tus reembolsos</p>
+        <h1 class="text-2xl font-black text-slate-900">Reembolsos</h1>
+        <p class="text-sm text-slate-600">
+          Administra solicitudes de reembolso y adjunta evidencia (PDF/imagen).
+        </p>
       </div>
 
       <button
         v-if="canCreate"
-        @click="openCreateModal"
-        class="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 shadow-sm font-semibold"
+        @click="openCreate()"
+        class="px-4 py-2 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700"
       >
-        + Nueva Solicitud
+        Nuevo reembolso
       </button>
     </div>
 
-    <!-- Filters -->
-    <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-200 mb-4 flex flex-col md:flex-row gap-3">
-      <input
-        v-model="search"
-        placeholder="Buscar por concepto, proveedor o factura..."
-        class="border border-slate-300 p-2 rounded-lg w-full md:w-1/2 outline-none focus:ring-2 focus:ring-indigo-500"
-      />
-      <select
-        v-model="statusFilter"
-        class="border border-slate-300 p-2 rounded-lg w-full md:w-1/4 outline-none focus:ring-2 focus:ring-indigo-500"
-      >
-        <option value="">Todos los estatus</option>
-        <option value="DRAFT">Borrador</option>
-        <option value="PENDING_OPS_REVIEW">Revisión Operativa</option>
-        <option value="PENDING_FISCAL_REVIEW">Revisión Fiscal</option>
-        <option value="RETURNED">Regresado</option>
-        <option value="APPROVED">Aprobado (por pagar)</option>
-        <option value="PROCESSED">Pagado</option>
-      </select>
-
-      <button
-        @click="fetchItems"
-        class="bg-slate-900 text-white px-4 py-2 rounded-lg font-semibold hover:bg-slate-800"
-      >
-        Actualizar
-      </button>
+    <div v-if="loadError" class="p-3 rounded-xl bg-rose-50 border border-rose-100 text-rose-700 text-sm">
+      {{ loadError }}
     </div>
 
-    <!-- Table -->
-    <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-      <table class="w-full text-left border-collapse">
-        <thead class="bg-slate-50 text-slate-600 uppercase text-xs border-b border-slate-200">
-          <tr>
-            <th class="p-4">Factura/Fecha</th>
-            <th class="p-4">Plantel</th>
-            <th class="p-4">Concepto</th>
-            <th class="p-4">Monto</th>
-            <th class="p-4">Estatus</th>
-            <th class="p-4 text-right">Acciones</th>
-          </tr>
-        </thead>
+    <div class="bg-white border border-slate-200 rounded-2xl overflow-hidden">
+      <div class="p-4 border-b border-slate-200 flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
+        <div class="flex gap-2 items-center">
+          <input
+            v-model="q"
+            class="w-full md:w-80 border border-slate-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+            placeholder="Buscar (proveedor, factura, concepto)…"
+            @keyup.enter="refresh()"
+          />
+          <button
+            class="px-3 py-2 rounded-lg bg-slate-900 text-white text-sm font-bold hover:bg-slate-800"
+            @click="refresh()"
+          >
+            Buscar
+          </button>
+        </div>
 
-        <tbody class="divide-y divide-slate-100">
-          <tr v-for="item in filteredItems" :key="item.id" class="hover:bg-slate-50">
-            <td class="p-4">
-              <div class="font-bold text-slate-700">{{ item.invoice_number || `#${item.id}` }}</div>
-              <div class="text-xs text-slate-500">{{ formatDate(item.invoice_date) }}</div>
-            </td>
+        <div class="flex gap-2 items-center">
+          <select
+            v-model="statusFilter"
+            class="border border-slate-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+            @change="refresh()"
+          >
+            <option value="">Todos</option>
+            <option value="PENDING">Pendiente</option>
+            <option value="APPROVED">Aprobado</option>
+            <option value="REJECTED">Rechazado</option>
+          </select>
 
-            <td class="p-4 text-sm">
-              <div class="font-medium text-slate-700">{{ item.plantel_codigo || '—' }}</div>
-              <div class="text-xs text-slate-500">{{ item.plantel_nombre || '—' }}</div>
-            </td>
-
-            <td class="p-4">
-              <div class="font-medium text-slate-800">{{ item.concept }}</div>
-              <div class="text-xs text-slate-500 truncate max-w-[280px]">
-                {{ item.provider }} · {{ item.description || '' }}
-              </div>
-              <div v-if="item.status === 'RETURNED' && item.rejection_reason" class="mt-2 text-xs text-rose-700 bg-rose-50 border border-rose-100 rounded-lg p-2">
-                <span class="font-bold">Observaciones:</span> {{ item.rejection_reason }}
-              </div>
-            </td>
-
-            <td class="p-4 font-mono font-bold text-slate-800">
-              ${{ formatMoney(item.amount) }}
-            </td>
-
-            <td class="p-4">
-              <span :class="badgeClass(item.status)" class="px-2 py-1 rounded text-xs font-bold border">
-                {{ formatStatus(item.status) }}
-              </span>
-            </td>
-
-            <td class="p-4 text-right space-x-2">
-              <a
-                v-if="item.file_url"
-                :href="`/uploads/${item.file_url}`"
-                target="_blank"
-                class="text-indigo-700 text-xs font-semibold underline"
-              >
-                Ver archivo
-              </a>
-
-              <button
-                v-if="canEdit(item)"
-                @click="openEditModal(item)"
-                class="bg-slate-100 text-slate-800 px-2 py-1 rounded text-xs font-bold hover:bg-slate-200"
-              >
-                Editar
-              </button>
-
-              <button
-                v-if="canSubmit(item)"
-                @click="quickSubmit(item)"
-                class="bg-emerald-100 text-emerald-800 px-2 py-1 rounded text-xs font-bold hover:bg-emerald-200"
-              >
-                Enviar
-              </button>
-            </td>
-          </tr>
-
-          <tr v-if="!loading && filteredItems.length === 0">
-            <td colspan="6" class="p-10 text-center text-slate-500">
-              Sin resultados.
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-
-    <!-- Create/Edit Modal -->
-    <Teleport to="body">
-      <div v-if="showModal" class="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 p-4">
-        <div class="bg-white w-full max-w-xl rounded-2xl shadow-2xl overflow-hidden border border-slate-200">
-          <div class="px-6 py-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
-            <h3 class="text-lg font-bold text-slate-800">
-              {{ editingId ? 'Editar solicitud' : 'Nueva solicitud' }}
-            </h3>
-            <button @click="closeModal" class="text-slate-500 hover:text-slate-700 font-bold">✕</button>
-          </div>
-
-          <div class="p-6 space-y-4">
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label class="block text-sm font-semibold text-slate-700 mb-1">Fecha de factura</label>
-                <input v-model="form.date" type="date" class="w-full border border-slate-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500" />
-              </div>
-              <div>
-                <label class="block text-sm font-semibold text-slate-700 mb-1">Número de factura</label>
-                <input v-model="form.invoice" class="w-full border border-slate-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500" placeholder="Ej: A-1234" />
-              </div>
-            </div>
-
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label class="block text-sm font-semibold text-slate-700 mb-1">Proveedor</label>
-                <input v-model="form.provider" class="w-full border border-slate-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500" placeholder="Proveedor" />
-              </div>
-              <div>
-                <label class="block text-sm font-semibold text-slate-700 mb-1">Monto</label>
-                <input v-model="form.amount" type="number" step="0.01" class="w-full border border-slate-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500" placeholder="0.00" />
-              </div>
-            </div>
-
-            <div>
-              <label class="block text-sm font-semibold text-slate-700 mb-1">Concepto</label>
-              <input v-model="form.concept" class="w-full border border-slate-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500" placeholder="Concepto corto" />
-            </div>
-
-            <div>
-              <label class="block text-sm font-semibold text-slate-700 mb-1">Descripción / Justificación</label>
-              <textarea v-model="form.desc" rows="3" class="w-full border border-slate-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500 resize-none" placeholder="Justificación detallada (por qué)"></textarea>
-            </div>
-
-            <div class="bg-amber-50 text-amber-900 border border-amber-100 rounded-xl p-3 text-xs">
-              ⚠️ La factura debe estar escaneada con las <strong>3 firmas</strong> para justificar el gasto.
-            </div>
-
-            <div>
-              <label class="block text-sm font-semibold text-slate-700 mb-1">Archivo (PDF/imagen)</label>
-              <input type="file" @change="handleFile" class="w-full text-sm" />
-              <div v-if="editingId && existingFileUrl" class="text-xs text-slate-500 mt-2">
-                Archivo actual:
-                <a :href="`/uploads/${existingFileUrl}`" target="_blank" class="text-indigo-700 underline font-semibold">
-                  ver
-                </a>
-              </div>
-            </div>
-          </div>
-
-          <div class="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-2">
-            <button
-              @click="closeModal"
-              class="px-4 py-2 rounded-lg text-slate-700 font-semibold hover:bg-slate-100"
-              :disabled="saving"
-            >
-              Cancelar
-            </button>
-
-            <button
-              @click="saveDraft"
-              class="px-4 py-2 rounded-lg bg-slate-900 text-white font-semibold hover:bg-slate-800 disabled:opacity-50"
-              :disabled="saving"
-            >
-              {{ saving ? 'Guardando...' : 'Guardar borrador' }}
-            </button>
-
-            <button
-              @click="submitToReview"
-              class="px-4 py-2 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-50"
-              :disabled="saving"
-            >
-              {{ saving ? 'Enviando...' : 'Enviar' }}
-            </button>
-          </div>
+          <button
+            class="px-3 py-2 rounded-lg bg-white border border-slate-300 text-sm font-bold hover:bg-slate-100"
+            @click="resetFilters()"
+          >
+            Limpiar
+          </button>
         </div>
       </div>
-    </Teleport>
+
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50 text-slate-600">
+            <tr class="text-left">
+              <th class="px-4 py-3 font-bold">Fecha</th>
+              <th class="px-4 py-3 font-bold">Factura</th>
+              <th class="px-4 py-3 font-bold">Proveedor</th>
+              <th class="px-4 py-3 font-bold">Monto</th>
+              <th class="px-4 py-3 font-bold">Estatus</th>
+              <th class="px-4 py-3 font-bold">Archivo</th>
+              <th class="px-4 py-3 font-bold w-40">Acciones</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            <tr v-if="loading">
+              <td colspan="7" class="px-4 py-6 text-slate-500">Cargando…</td>
+            </tr>
+
+            <tr v-else-if="items.length === 0">
+              <td colspan="7" class="px-4 py-6 text-slate-500">Sin resultados.</td>
+            </tr>
+
+            <tr
+              v-else
+              v-for="it in items"
+              :key="it.id"
+              class="border-t border-slate-100 hover:bg-slate-50"
+            >
+              <td class="px-4 py-3">
+                <span class="font-semibold text-slate-800">{{ fmtDate(it.date) }}</span>
+              </td>
+
+              <td class="px-4 py-3">
+                <div class="font-semibold text-slate-800">{{ it.invoice_number || '—' }}</div>
+                <div class="text-xs text-slate-500">{{ it.concept || '—' }}</div>
+              </td>
+
+              <td class="px-4 py-3">
+                <div class="font-semibold text-slate-800">{{ it.provider || '—' }}</div>
+              </td>
+
+              <td class="px-4 py-3">
+                <span class="font-black text-slate-900">{{ fmtMoney(it.amount) }}</span>
+              </td>
+
+              <td class="px-4 py-3">
+                <span
+                  class="inline-flex items-center px-2 py-1 rounded-lg text-xs font-bold border"
+                  :class="statusBadgeClass(it.status)"
+                >
+                  {{ statusLabel(it.status) }}
+                </span>
+              </td>
+
+              <td class="px-4 py-3">
+                <a
+                  v-if="it.file_url"
+                  class="text-indigo-700 underline font-semibold"
+                  :href="`/uploads/${it.file_url}`"
+                  target="_blank"
+                >
+                  ver
+                </a>
+                <span v-else class="text-slate-400">—</span>
+              </td>
+
+              <td class="px-4 py-3">
+                <div class="flex gap-2">
+                  <button
+                    class="px-3 py-1.5 rounded-lg bg-white border border-slate-300 text-xs font-bold hover:bg-slate-100 disabled:opacity-50"
+                    :disabled="!canEdit(it)"
+                    @click="openEdit(it)"
+                  >
+                    Editar
+                  </button>
+
+                  <button
+                    class="px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-bold hover:bg-rose-700 disabled:opacity-50"
+                    :disabled="!canDelete(it) || deletingId === it.id"
+                    @click="remove(it)"
+                  >
+                    {{ deletingId === it.id ? 'Eliminando…' : 'Eliminar' }}
+                  </button>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Modal -->
+    <div
+      v-if="showModal"
+      class="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50"
+      @click.self="closeModal()"
+    >
+      <div class="w-full max-w-3xl bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-200">
+        <div class="px-6 py-4 bg-slate-900 text-white flex items-center justify-between">
+          <div class="font-black text-lg">
+            {{ editingId ? 'Editar reembolso' : 'Nuevo reembolso' }}
+          </div>
+          <button class="text-white/80 hover:text-white font-bold" @click="closeModal()">✕</button>
+        </div>
+
+        <div class="p-6 space-y-4">
+          <!-- NEW: CFDI QR Scanner -->
+          <div v-if="canCreate" class="space-y-2">
+            <CfdiQrScanner
+              @prefill="applyCfdiPrefill"
+              @debug="lastCfdiDebug = $event"
+            />
+            <div v-if="lastCfdiDebug?.satMeta || lastCfdiDebug?.parsed" class="text-xs text-slate-500">
+              <span class="font-semibold">CFDI:</span>
+              <span class="ml-1 font-mono">
+                {{ lastCfdiDebug?.parsed?.uuid || '—' }}
+              </span>
+              <span class="ml-2" v-if="lastCfdiDebug?.satMeta?.status">({{ lastCfdiDebug.satMeta.status }})</span>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label class="block text-sm font-semibold text-slate-700 mb-1">Fecha de factura</label>
+              <input
+                v-model="form.date"
+                type="date"
+                class="w-full border border-slate-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+            <div>
+              <label class="block text-sm font-semibold text-slate-700 mb-1">Número de factura</label>
+              <input
+                v-model="form.invoice"
+                class="w-full border border-slate-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500"
+                placeholder="Ej: A-1234"
+              />
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label class="block text-sm font-semibold text-slate-700 mb-1">Proveedor</label>
+              <input
+                v-model="form.provider"
+                class="w-full border border-slate-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500"
+                placeholder="Proveedor"
+              />
+            </div>
+            <div>
+              <label class="block text-sm font-semibold text-slate-700 mb-1">Monto</label>
+              <input
+                v-model="form.amount"
+                type="number"
+                step="0.01"
+                class="w-full border border-slate-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500"
+                placeholder="0.00"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-sm font-semibold text-slate-700 mb-1">Concepto</label>
+            <input
+              v-model="form.concept"
+              class="w-full border border-slate-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500"
+              placeholder="Concepto corto"
+            />
+          </div>
+
+          <div>
+            <label class="block text-sm font-semibold text-slate-700 mb-1">Descripción / Justificación</label>
+            <textarea
+              v-model="form.desc"
+              rows="3"
+              class="w-full border border-slate-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
+              placeholder="Justificación detallada (por qué)"
+            ></textarea>
+          </div>
+
+          <div class="bg-amber-50 text-amber-900 border border-amber-100 rounded-xl p-3 text-xs">
+            ⚠️ La factura debe estar escaneada con las <strong>3 firmas</strong> para justificar el gasto.
+          </div>
+
+          <div>
+            <label class="block text-sm font-semibold text-slate-700 mb-1">Archivo (PDF/imagen)</label>
+            <input type="file" @change="handleFile" class="w-full text-sm" />
+            <div v-if="editingId && existingFileUrl" class="text-xs text-slate-500 mt-2">
+              Archivo actual:
+              <a
+                :href="`/uploads/${existingFileUrl}`"
+                target="_blank"
+                class="text-indigo-700 underline font-semibold"
+              >
+                ver
+              </a>
+            </div>
+          </div>
+
+          <div v-if="saveError" class="p-3 rounded-xl bg-rose-50 border border-rose-100 text-rose-700 text-sm">
+            {{ saveError }}
+          </div>
+        </div>
+
+        <div class="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-2">
+          <button
+            class="px-4 py-2 rounded-xl bg-white border border-slate-300 font-bold hover:bg-slate-100"
+            @click="closeModal()"
+            :disabled="saving"
+          >
+            Cancelar
+          </button>
+          <button
+            class="px-4 py-2 rounded-xl bg-indigo-600 text-white font-black hover:bg-indigo-700 disabled:opacity-50"
+            @click="save()"
+            :disabled="saving"
+          >
+            {{ saving ? 'Guardando…' : (editingId ? 'Guardar cambios' : 'Crear') }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { useUserCookie } from '~/composables/useUserCookie';
+type Status = 'PENDING' | 'APPROVED' | 'REJECTED';
 
-definePageMeta({ middleware: 'auth' });
+type Reimbursement = {
+  id: number;
+  date: string;                 // YYYY-MM-DD
+  invoice_number: string | null;
+  provider: string | null;
+  amount: number;
+  concept: string | null;
+  description: string | null;
+  status: Status;
+  file_url: string | null;
+  // optionally present in your API; safe to ignore if not:
+  user_id?: number | null;
+};
 
-const userCookie = useUserCookie();
-const user = computed(() => userCookie.value);
+type Me = {
+  id: number;
+  role_name: string; // e.g. 'ADMIN_PLANTEL'
+};
 
-const items = ref<any[]>([]);
+const items = ref<Reimbursement[]>([]);
 const loading = ref(false);
+const loadError = ref('');
 
-const search = ref('');
-const statusFilter = ref('');
+const q = ref('');
+const statusFilter = ref<string>('');
+
+const me = ref<Me | null>(null);
 
 const showModal = ref(false);
 const saving = ref(false);
+const saveError = ref('');
+
+const deletingId = ref<number | null>(null);
 
 const editingId = ref<number | null>(null);
 const existingFileUrl = ref<string>('');
+
+const selectedFile = ref<File | null>(null);
 
 const form = ref({
   date: '',
@@ -246,172 +337,202 @@ const form = ref({
   desc: ''
 });
 
-const fileData = ref<File | null>(null);
+// CFDI debug
+const lastCfdiDebug = ref<any>(null);
 
-const canCreate = computed(() => {
-  const r = user.value?.role_name;
-  return r ? ['ADMIN_PLANTEL', 'SUPER_ADMIN'].includes(r) : false;
-});
+const canCreate = computed(() => me.value?.role_name === 'ADMIN_PLANTEL');
 
-const formatDate = (d: string) => (d ? new Date(d).toLocaleDateString('es-MX') : '—');
+// Edit/delete: keep conservative (pending-only). If your API includes user_id, it’ll also enforce owner.
+function canEdit(it: Reimbursement) {
+  if (!canCreate.value) return false;
+  return it.status === 'PENDING';
+}
+function canDelete(it: Reimbursement) {
+  if (!canCreate.value) return false;
+  return it.status === 'PENDING';
+}
 
-const formatMoney = (val: any) =>
-  Number(val || 0).toLocaleString('es-MX', { minimumFractionDigits: 2 });
+function statusLabel(s: Status) {
+  if (s === 'PENDING') return 'Pendiente';
+  if (s === 'APPROVED') return 'Aprobado';
+  return 'Rechazado';
+}
 
-const formatStatus = (s: string) => {
-  const map: Record<string, string> = {
-    DRAFT: 'BORRADOR',
-    PENDING_OPS_REVIEW: 'REVISIÓN OPS',
-    PENDING_FISCAL_REVIEW: 'REVISIÓN FISCAL',
-    RETURNED: 'REGRESADO',
-    APPROVED: 'APROBADO',
-    PROCESSED: 'PAGADO'
-  };
-  return map[s] || String(s || '').replace(/_/g, ' ');
-};
+function statusBadgeClass(s: Status) {
+  if (s === 'PENDING') return 'bg-amber-50 text-amber-800 border-amber-200';
+  if (s === 'APPROVED') return 'bg-emerald-50 text-emerald-800 border-emerald-200';
+  return 'bg-rose-50 text-rose-800 border-rose-200';
+}
 
-const badgeClass = (s: string) => {
-  switch (s) {
-    case 'PROCESSED':
-      return 'bg-emerald-50 text-emerald-700 border-emerald-200';
-    case 'APPROVED':
-      return 'bg-indigo-50 text-indigo-700 border-indigo-200';
-    case 'RETURNED':
-      return 'bg-rose-50 text-rose-700 border-rose-200';
-    case 'PENDING_OPS_REVIEW':
-    case 'PENDING_FISCAL_REVIEW':
-      return 'bg-amber-50 text-amber-700 border-amber-200';
-    case 'DRAFT':
-      return 'bg-slate-50 text-slate-700 border-slate-200';
-    default:
-      return 'bg-slate-50 text-slate-700 border-slate-200';
-  }
-};
-
-const filteredItems = computed(() => {
-  const q = (search.value || '').trim().toLowerCase();
-  return items.value.filter((i: any) => {
-    const matchesSearch =
-      !q ||
-      String(i.concept || '').toLowerCase().includes(q) ||
-      String(i.provider || '').toLowerCase().includes(q) ||
-      String(i.invoice_number || '').toLowerCase().includes(q);
-
-    const matchesStatus = statusFilter.value ? i.status === statusFilter.value : true;
-    return matchesSearch && matchesStatus;
-  });
-});
-
-const canEdit = (item: any) => {
-  const r = user.value?.role_name;
-  if (!r || !['ADMIN_PLANTEL', 'SUPER_ADMIN'].includes(r)) return false;
-  return ['DRAFT', 'RETURNED'].includes(String(item.status));
-};
-
-const canSubmit = (item: any) => canEdit(item) && !!item.id;
-
-const fetchItems = async () => {
-  loading.value = true;
+function fmtMoney(n: number) {
   try {
-    const params: any = {};
-    if (statusFilter.value) params.status = statusFilter.value;
-    items.value = await $fetch('/api/reimbursements', { params });
+    return new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(Number(n || 0));
+  } catch {
+    return `$${Number(n || 0).toFixed(2)}`;
+  }
+}
+
+function fmtDate(d: string) {
+  if (!d) return '—';
+  return d;
+}
+
+function resetFilters() {
+  q.value = '';
+  statusFilter.value = '';
+  refresh();
+}
+
+async function loadMe() {
+  // Adjust this endpoint if yours differs.
+  // Expected: { id, role_name }
+  me.value = await $fetch<Me>('/api/auth/me');
+}
+
+async function refresh() {
+  loading.value = true;
+  loadError.value = '';
+
+  try {
+    // Adjust this endpoint/shape if yours differs.
+    const res = await $fetch<{ items: Reimbursement[] }>('/api/reembolsos', {
+      params: {
+        q: q.value || undefined,
+        status: statusFilter.value || undefined
+      }
+    });
+    items.value = res.items || [];
   } catch (e: any) {
-    console.error(e);
-    alert(e?.data?.statusMessage || 'No se pudo cargar');
+    loadError.value = e?.data?.statusMessage || e?.message || 'No se pudo cargar.';
   } finally {
     loading.value = false;
   }
-};
-
-const handleFile = (e: Event) => {
-  const input = e.target as HTMLInputElement;
-  fileData.value = input.files?.[0] || null;
-};
-
-const openCreateModal = () => {
-  editingId.value = null;
-  existingFileUrl.value = '';
-  form.value = { date: '', invoice: '', provider: '', amount: '', concept: '', desc: '' };
-  fileData.value = null;
-  showModal.value = true;
-};
-
-const openEditModal = (item: any) => {
-  editingId.value = Number(item.id);
-  existingFileUrl.value = String(item.file_url || '');
-  form.value = {
-    date: item.invoice_date ? String(item.invoice_date).slice(0, 10) : '',
-    invoice: String(item.invoice_number || ''),
-    provider: String(item.provider || ''),
-    amount: String(item.amount || ''),
-    concept: String(item.concept || ''),
-    desc: String(item.description || '')
-  };
-  fileData.value = null;
-  showModal.value = true;
-};
-
-const closeModal = () => {
-  showModal.value = false;
-};
-
-function buildFormData(action: 'DRAFT' | 'SUBMIT') {
-  const fd = new FormData();
-  fd.append('date', form.value.date || '');
-  fd.append('invoice', form.value.invoice || '');
-  fd.append('provider', form.value.provider || '');
-  fd.append('amount', String(form.value.amount || ''));
-  fd.append('concept', form.value.concept || '');
-  fd.append('desc', form.value.desc || '');
-  fd.append('action', action);
-
-  if (fileData.value) fd.append('file', fileData.value);
-  if (editingId.value) fd.append('id', String(editingId.value));
-
-  return fd;
 }
 
-const saveDraft = async () => {
+function openCreate() {
+  editingId.value = null;
+  existingFileUrl.value = '';
+  selectedFile.value = null;
+  saveError.value = '';
+  lastCfdiDebug.value = null;
+
+  form.value = {
+    date: new Date().toISOString().slice(0, 10),
+    invoice: '',
+    provider: '',
+    amount: '',
+    concept: '',
+    desc: ''
+  };
+
+  showModal.value = true;
+}
+
+function openEdit(it: Reimbursement) {
+  if (!canEdit(it)) return;
+
+  editingId.value = it.id;
+  existingFileUrl.value = it.file_url || '';
+  selectedFile.value = null;
+  saveError.value = '';
+  lastCfdiDebug.value = null;
+
+  form.value = {
+    date: it.date || '',
+    invoice: it.invoice_number || '',
+    provider: it.provider || '',
+    amount: String(it.amount ?? ''),
+    concept: it.concept || '',
+    desc: it.description || ''
+  };
+
+  showModal.value = true;
+}
+
+function closeModal() {
+  showModal.value = false;
+  saving.value = false;
+  saveError.value = '';
+  selectedFile.value = null;
+}
+
+function handleFile(ev: Event) {
+  const input = ev.target as HTMLInputElement;
+  selectedFile.value = input.files?.[0] || null;
+}
+
+function applyCfdiPrefill(p: any) {
+  if (p?.amount != null && String(p.amount) !== 'null') {
+    form.value.amount = String(p.amount);
+  }
+  if (p?.provider) {
+    form.value.provider = String(p.provider);
+  }
+  if (p?.invoiceNumber) {
+    form.value.invoice = String(p.invoiceNumber);
+  }
+  if (p?.date) {
+    form.value.date = String(p.date).slice(0, 10);
+  }
+}
+
+async function save() {
+  saveError.value = '';
   saving.value = true;
+
   try {
-    const fd = buildFormData('DRAFT');
+    const fd = new FormData();
+    fd.set('date', form.value.date);
+    fd.set('invoice_number', form.value.invoice);
+    fd.set('provider', form.value.provider);
+    fd.set('amount', form.value.amount);
+    fd.set('concept', form.value.concept);
+    fd.set('description', form.value.desc);
+    if (selectedFile.value) fd.set('file', selectedFile.value);
+
     if (editingId.value) {
-      await $fetch('/api/reimbursements/update', { method: 'POST', body: fd });
+      // Adjust endpoint/method to match your API.
+      await $fetch(`/api/reembolsos/${editingId.value}`, {
+        method: 'PUT',
+        body: fd
+      });
     } else {
-      await $fetch('/api/reimbursements', { method: 'POST', body: fd });
+      // Adjust endpoint/method to match your API.
+      await $fetch('/api/reembolsos', {
+        method: 'POST',
+        body: fd
+      });
     }
-    showModal.value = false;
-    await fetchItems();
+
+    closeModal();
+    await refresh();
   } catch (e: any) {
-    alert(e?.data?.statusMessage || 'Error al guardar borrador');
+    saveError.value = e?.data?.statusMessage || e?.message || 'No se pudo guardar.';
   } finally {
     saving.value = false;
   }
-};
+}
 
-const submitToReview = async () => {
-  saving.value = true;
+async function remove(it: Reimbursement) {
+  if (!canDelete(it)) return;
+
+  const ok = confirm(`¿Eliminar el reembolso #${it.id}?`);
+  if (!ok) return;
+
+  deletingId.value = it.id;
   try {
-    const fd = buildFormData('SUBMIT');
-    if (editingId.value) {
-      await $fetch('/api/reimbursements/update', { method: 'POST', body: fd });
-    } else {
-      await $fetch('/api/reimbursements', { method: 'POST', body: fd });
-    }
-    showModal.value = false;
-    await fetchItems();
+    // Adjust endpoint/method to match your API.
+    await $fetch(`/api/reembolsos/${it.id}`, { method: 'DELETE' });
+    await refresh();
   } catch (e: any) {
-    alert(e?.data?.statusMessage || 'Error al enviar');
+    alert(e?.data?.statusMessage || e?.message || 'No se pudo eliminar.');
   } finally {
-    saving.value = false;
+    deletingId.value = null;
   }
-};
+}
 
-const quickSubmit = async (item: any) => {
-  // quick submit uses the same modal semantics: force user to ensure file exists if needed
-  openEditModal(item);
-};
-
-onMounted(fetchItems);
+onMounted(async () => {
+  await loadMe();
+  await refresh();
+});
 </script>
