@@ -39,14 +39,21 @@ export default defineEventHandler(async (event) => {
   // We only expect a single filename (UUID.ext). If someone tries nested paths, block.
   if (rel.includes('/')) throw createError({ statusCode: 400, statusMessage: 'Invalid filename' });
 
-  // Ensure file belongs to some reimbursement row
   const db = await useDb();
+
+  // FIX: Look up the file in 'reimbursement_items' and join with 'reimbursements'
+  // to get the user_id for permission checking.
   const [rows]: any = await db.execute(
-    `SELECT id, user_id FROM reimbursements WHERE file_url = ? LIMIT 1`,
+    `SELECT r.id, r.user_id 
+     FROM reimbursement_items i
+     JOIN reimbursements r ON i.reimbursement_id = r.id
+     WHERE i.file_url = ? 
+     LIMIT 1`,
     [rel]
   );
+  
   const row = rows?.[0];
-  if (!row) throw createError({ statusCode: 404, statusMessage: 'File not found' });
+  if (!row) throw createError({ statusCode: 404, statusMessage: 'File not found in database' });
 
   // Requester can only access their own files
   if (user.role_name === 'ADMIN_PLANTEL' && Number(row.user_id) !== Number(user.id)) {
@@ -66,7 +73,7 @@ export default defineEventHandler(async (event) => {
   try {
     stat = await fs.stat(abs);
   } catch {
-    throw createError({ statusCode: 404, statusMessage: 'File not found' });
+    throw createError({ statusCode: 404, statusMessage: 'File not found on disk' });
   }
   if (!stat.isFile()) throw createError({ statusCode: 404, statusMessage: 'File not found' });
 
