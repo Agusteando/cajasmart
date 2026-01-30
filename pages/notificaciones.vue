@@ -58,38 +58,40 @@
       </div>
 
       <div v-else class="divide-y divide-slate-100">
-        <div
-          v-for="n in items"
-          :key="n.id"
-          class="p-4 hover:bg-slate-50 flex items-start justify-between gap-4"
-        >
-          <div class="min-w-0">
-            <div class="flex items-center gap-2">
-              <span
-                v-if="!n.read_at"
-                class="inline-block w-2 h-2 rounded-full bg-indigo-600"
-              ></span>
-              <div class="font-bold text-slate-800 truncate">{{ n.title }}</div>
-              <div class="text-xs text-slate-400">{{ formatDateTime(n.created_at) }}</div>
+        <!-- Added v-if="n.title" to prevent rendering empty rows if API returns garbage -->
+        <template v-for="n in items" :key="n.id">
+          <div
+            v-if="n.title"
+            class="p-4 hover:bg-slate-50 flex items-start justify-between gap-4"
+          >
+            <div class="min-w-0">
+              <div class="flex items-center gap-2">
+                <span
+                  v-if="!n.read_at"
+                  class="inline-block w-2 h-2 rounded-full bg-indigo-600"
+                ></span>
+                <div class="font-bold text-slate-800 truncate">{{ n.title }}</div>
+                <div class="text-xs text-slate-400">{{ formatDateTime(n.created_at) }}</div>
+              </div>
+              <div class="text-sm text-slate-600 mt-1">
+                {{ n.message }}
+              </div>
+              <div v-if="n.url" class="mt-2">
+                <a :href="n.url" class="text-indigo-700 text-sm font-semibold underline">Abrir</a>
+              </div>
             </div>
-            <div class="text-sm text-slate-600 mt-1">
-              {{ n.message }}
-            </div>
-            <div v-if="n.url" class="mt-2">
-              <a :href="n.url" class="text-indigo-700 text-sm font-semibold underline">Abrir</a>
-            </div>
-          </div>
 
-          <div class="flex gap-2 shrink-0">
-            <button
-              v-if="!n.read_at"
-              @click="markRead(n.id)"
-              class="px-3 py-1 rounded-lg bg-slate-900 text-white text-xs font-bold hover:bg-slate-800"
-            >
-              Leído
-            </button>
+            <div class="flex gap-2 shrink-0">
+              <button
+                v-if="!n.read_at"
+                @click="markRead(n.id)"
+                class="px-3 py-1 rounded-lg bg-slate-900 text-white text-xs font-bold hover:bg-slate-800"
+              >
+                Leído
+              </button>
+            </div>
           </div>
-        </div>
+        </template>
       </div>
     </div>
   </div>
@@ -101,7 +103,27 @@ definePageMeta({ middleware: 'auth' });
 const { items, fetchList, markRead, markAllRead } = useNotifications();
 const { isSupported, permission, subscribed, refreshStatus, enablePush, disablePush } = usePush();
 
-const formatDateTime = (d: string) => new Date(d).toLocaleString('es-MX');
+// Robust date formatter
+const formatDateTime = (d: any) => {
+  if (!d) return '';
+  // Fix for Safari/iOS which dislike the SQL " " separator
+  const safeDate = String(d).replace(' ', 'T');
+  try {
+    const dateObj = new Date(safeDate);
+    // If invalid date, return raw string
+    if (isNaN(dateObj.getTime())) return String(d);
+    
+    return dateObj.toLocaleString('es-MX', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  } catch {
+    return String(d);
+  }
+};
 
 const statusText = computed(() => {
   if (!isSupported.value) return 'No soportado';

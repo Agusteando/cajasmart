@@ -34,11 +34,15 @@ export default defineEventHandler(async (event) => {
 
   const db = await useDb();
 
-  // Build WHERE safely with bound params (only the LIMIT/OFFSET are inlined after validation)
-  const whereParts: string[] = ['user_id = ?'];
+  // Build WHERE safely. 
+  // We explicitly filter out empty titles to avoid "ghost" rows in the UI.
+  const whereParts: string[] = [
+    'user_id = ?',
+    'title IS NOT NULL',
+    "title != ''"
+  ];
   const params: any[] = [user.id];
 
-  // If your schema uses another column (e.g., is_read), change this condition accordingly.
   if (unread) whereParts.push('read_at IS NULL');
 
   const whereSql = `WHERE ${whereParts.join(' AND ')}`;
@@ -50,7 +54,6 @@ export default defineEventHandler(async (event) => {
   );
   const total = Number(countRows?.[0]?.total || 0);
 
-  // IMPORTANT: inline LIMIT/OFFSET as validated integers to prevent ER_WRONG_ARGUMENTS
   const sql = `
     SELECT *
     FROM notifications
