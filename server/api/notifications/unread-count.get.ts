@@ -5,8 +5,9 @@ export default defineEventHandler(async (event) => {
   const user = requireAuth(event);
   const db = await useDb();
 
+  // Schema: is_read tinyint(1)
   const [rows]: any = await db.execute(
-    `SELECT COUNT(*) as c FROM notifications WHERE user_id = ? AND read_at IS NULL`,
+    `SELECT COUNT(*) as c FROM notifications WHERE user_id = ? AND is_read = 0`,
     [user.id]
   );
 

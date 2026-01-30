@@ -58,16 +58,17 @@
       </div>
 
       <div v-else class="divide-y divide-slate-100">
-        <!-- Added v-if="n.title" to prevent rendering empty rows if API returns garbage -->
         <template v-for="n in items" :key="n.id">
+          <!-- Filter out bad data visually just in case -->
           <div
             v-if="n.title"
             class="p-4 hover:bg-slate-50 flex items-start justify-between gap-4"
           >
             <div class="min-w-0">
               <div class="flex items-center gap-2">
+                <!-- FIXED: Changed !n.read_at to !n.is_read -->
                 <span
-                  v-if="!n.read_at"
+                  v-if="!n.is_read"
                   class="inline-block w-2 h-2 rounded-full bg-indigo-600"
                 ></span>
                 <div class="font-bold text-slate-800 truncate">{{ n.title }}</div>
@@ -82,8 +83,9 @@
             </div>
 
             <div class="flex gap-2 shrink-0">
+              <!-- FIXED: Changed !n.read_at to !n.is_read -->
               <button
-                v-if="!n.read_at"
+                v-if="!n.is_read"
                 @click="markRead(n.id)"
                 class="px-3 py-1 rounded-lg bg-slate-900 text-white text-xs font-bold hover:bg-slate-800"
               >
@@ -103,14 +105,11 @@ definePageMeta({ middleware: 'auth' });
 const { items, fetchList, markRead, markAllRead } = useNotifications();
 const { isSupported, permission, subscribed, refreshStatus, enablePush, disablePush } = usePush();
 
-// Robust date formatter
 const formatDateTime = (d: any) => {
   if (!d) return '';
-  // Fix for Safari/iOS which dislike the SQL " " separator
   const safeDate = String(d).replace(' ', 'T');
   try {
     const dateObj = new Date(safeDate);
-    // If invalid date, return raw string
     if (isNaN(dateObj.getTime())) return String(d);
     
     return dateObj.toLocaleString('es-MX', {
