@@ -1,153 +1,78 @@
 import { readMultipartFormData } from 'h3';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import { useDb } from '~/server/utils/db';
 import { requireAuth } from '~/server/utils/auth';
 import { createAuditLog } from '~/server/utils/audit';
-import { notifyRoleUsers, createNotification } from '~/server/utils/notifications';
-import { randomUUID } from 'node:crypto';
-import fs from 'node:fs/promises';
-import path from 'node:path';
+import { notifyRoleUsers } from '~/server/utils/notifications';
 
-function pickField(parts: any[], name: string) {
-  return parts.find((p) => p.name === name)?.data?.toString?.() || '';
+async function saveUpload(file: { filename?: string; data: any }) {
+  const cfg = useRuntimeConfig();
+  const uploadsDir = path.resolve(process.cwd(), cfg.uploadDir || './public/uploads');
+  await fs.mkdir(uploadsDir, { recursive: true });
+  const filename = `${Date.now()}_${Math.random().toString(16).slice(2)}_${(file.filename||'f').replace(/[^a-z0-9.]/gi,'_')}`;
+  await fs.writeFile(path.join(uploadsDir, filename), file.data);
+  return filename;
 }
 
 export default defineEventHandler(async (event) => {
   const user = requireAuth(event);
-
-  // Only requester or super admin can update/resubmit
-  if (user.role_name !== 'ADMIN_PLANTEL' && user.role_name !== 'SUPER_ADMIN') {
-    throw createError({ statusCode: 403, statusMessage: 'No autorizado' });
-  }
-
-  const parts = await readMultipartFormData(event);
-  if (!parts) throw createError({ statusCode: 400, statusMessage: 'No data' });
-
-  const id = Number(pickField(parts, 'id'));
-  if (!Number.isFinite(id) || id <= 0) {
-    throw createError({ statusCode: 400, statusMessage: 'ID inválido' });
-  }
-
-  const invoiceDate = pickField(parts, 'date');
-  const invoiceNumber = pickField(parts, 'invoice');
-  const provider = pickField(parts, 'provider');
-  const amountRaw = pickField(parts, 'amount');
-  const concept = pickField(parts, 'concept');
-  const description = pickField(parts, 'desc');
-  const action = (pickField(parts, 'action') || 'DRAFT').toUpperCase(); // DRAFT | SUBMIT
-
-  const amount = Number.parseFloat(amountRaw);
-  if (!Number.isFinite(amount) || amount <= 0) {
-    throw createError({ statusCode: 400, statusMessage: 'Monto inválido' });
-  }
-
-  if (action !== 'DRAFT' && action !== 'SUBMIT') {
-    throw createError({ statusCode: 400, statusMessage: 'Acción inválida' });
-  }
-
   const db = await useDb();
 
-  const [rows]: any = await db.execute(`SELECT * FROM reimbursements WHERE id = ? LIMIT 1`, [id]);
-  const existing = rows?.[0];
-  if (!existing) throw createError({ statusCode: 404, statusMessage: 'Solicitud no encontrada' });
-
-  // Requester can only update their own
-  if (user.role_name === 'ADMIN_PLANTEL' && Number(existing.user_id) !== Number(user.id)) {
-    throw createError({ statusCode: 403, statusMessage: 'No autorizado' });
+  let body: any = {};
+  const parts = (await readMultipartFormData(event)) || [];
+  for (const p of parts) {
+    if (p.name !== 'file') body[p.name || ''] = p.data.toString('utf8');
   }
 
-  // Only allow editing/resubmitting DRAFT/RETURNED (matches original workflow)
-  const currentStatus = String(existing.status || '');
-  if (!['DRAFT', 'RETURNED'].includes(currentStatus) && user.role_name !== 'SUPER_ADMIN') {
-    throw createError({
-      statusCode: 400,
-      statusMessage: 'Solo puedes editar borradores o solicitudes regresadas'
-    });
+  const id = body.id;
+  if(!id) throw createError({statusCode:400, statusMessage:'Falta ID'});
+
+  let fileUrl: string | null = null;
+  const filePart = parts.find((p: any) => p?.name === 'file' && p?.data?.length);
+  if (filePart) fileUrl = await saveUpload(filePart as any);
+  else {
+    const [rows]: any = await db.execute('SELECT file_url FROM reimbursement_items WHERE reimbursement_id = ? LIMIT 1', [id]);
+    fileUrl = rows?.[0]?.file_url;
   }
 
-  // File handling (optional replacement)
-  const filePart = parts.find((p) => p.name === 'file');
-  let fileUrl = String(existing.file_url || '');
-
-  if (filePart && filePart.filename) {
-    const config = useRuntimeConfig();
-    const ext = path.extname(filePart.filename);
-    const safeName = `${randomUUID()}${ext}`;
-    const uploadDir = config.uploadDir || './public/uploads';
-    await fs.mkdir(uploadDir, { recursive: true });
-    await fs.writeFile(path.join(uploadDir, safeName), filePart.data);
-    fileUrl = safeName;
+  if (body.conceptos && typeof body.conceptos === 'string') {
+    try { body.conceptos = JSON.parse(body.conceptos); } catch {}
   }
 
-  // If submitting, require some file (existing or new)
-  if (action === 'SUBMIT' && !fileUrl) {
-    throw createError({ statusCode: 400, statusMessage: 'Archivo de factura requerido para enviar' });
-  }
+  const conceptos = Array.isArray(body.conceptos) ? body.conceptos : [];
+  let totalAmount = 0;
+  conceptos.forEach((c:any) => totalAmount += Number(c.amount));
 
-  const nextStatus = action === 'DRAFT' ? 'DRAFT' : 'PENDING_OPS_REVIEW';
+  const fechaISO = body.fechaISO ? new Date(body.fechaISO).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
+  
+  const connection = await db.getConnection();
+  await connection.beginTransaction();
 
-  // Update record
-  await db.execute(
-    `
-    UPDATE reimbursements
-    SET
-      invoice_date = ?,
-      invoice_number = ?,
-      provider = ?,
-      concept = ?,
-      description = ?,
-      amount = ?,
-      file_url = ?,
-      status = ?,
-      rejection_reason = NULL,
-      returned_by = NULL,
-      updated_at = NOW()
-    WHERE id = ?
-    `,
-    [
-      invoiceDate || null,
-      invoiceNumber || null,
-      provider || null,
-      concept || null,
-      description || null,
-      amount,
-      fileUrl || null,
-      nextStatus,
-      id
-    ]
-  );
-
-  // Audit
-  await createAuditLog({
-    entityType: 'reimbursement',
-    entityId: id,
-    action: action === 'SUBMIT' ? 'RESUBMIT' : 'UPDATE_DRAFT',
-    fromStatus: currentStatus,
-    toStatus: nextStatus,
-    actorUserId: user.id,
-    comment: action === 'SUBMIT' ? 'Reenviado a revisión operativa' : 'Actualizado'
-  });
-
-  // Notify ops if resubmitted/submitted
-  if (action === 'SUBMIT') {
-    await notifyRoleUsers(
-      'REVISOR_OPS',
-      'NEW_REQUEST',
-      'Solicitud (re)enviada',
-      `Solicitud #${id} reenviada por ${user.nombre} por $${amount.toFixed(2)}`,
-      'reimbursement',
-      id
+  try {
+    await connection.execute(
+      `UPDATE reimbursements SET total_amount = ?, reimbursement_date = ?, status = 'PENDING_OPS_REVIEW', rejection_reason = NULL, returned_by = NULL, updated_at = NOW() WHERE id = ?`,
+      [totalAmount, fechaISO, id]
     );
 
-    // Optional: notify requester confirmation (nice UX)
-    await createNotification({
-      userId: Number(existing.user_id),
-      type: 'SUBMITTED',
-      title: 'Solicitud enviada',
-      message: `Tu solicitud #${id} fue enviada a revisión operativa.`,
-      referenceType: 'reimbursement',
-      referenceId: id
-    });
-  }
+    await connection.execute('DELETE FROM reimbursement_items WHERE reimbursement_id = ?', [id]);
 
-  return { success: true, id, status: nextStatus };
+    for (const c of conceptos) {
+      await connection.execute(
+        `INSERT INTO reimbursement_items (reimbursement_id, invoice_date, invoice_number, provider, concept, description, amount, file_url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+        [id, c.invoice_date||null, c.invoice_number||null, c.provider||null, c.concept||'', c.description||null, Number(c.amount), fileUrl]
+      );
+    }
+
+    await connection.commit();
+    await createAuditLog({ entityType: 'reimbursement', entityId: id, action: 'UPDATE', toStatus: 'PENDING_OPS_REVIEW', actorUserId: user.id });
+    await notifyRoleUsers('REVISOR_OPS', 'NEW_REQUEST', 'Solicitud Corregida', `${user.nombre} corrigió #${id}`, 'reimbursement', Number(id));
+
+    return { ok: true, id };
+  } catch (e) {
+    await connection.rollback();
+    throw createError({ statusCode: 500, statusMessage: 'Error Update' });
+  } finally {
+    connection.release();
+  }
 });

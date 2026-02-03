@@ -1,91 +1,94 @@
 <template>
-  <div class="border border-slate-200 rounded-xl p-4 bg-white space-y-3">
-    <div class="flex items-center justify-between">
-      <div class="font-bold text-slate-800">Escanear QR (CFDI)</div>
-      <div class="flex gap-2">
-        <button
-          v-if="!scanning"
-          @click="startCamera"
-          class="px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-bold hover:bg-slate-800"
-        >
-          Usar cámara
-        </button>
-        <button
-          v-else
-          @click="stopCamera"
-          class="px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-bold hover:bg-rose-700"
-        >
-          Detener
-        </button>
-      </div>
+  <div class="bg-slate-50 border border-slate-200 rounded-2xl overflow-hidden">
+    <!-- Tabs -->
+    <div class="flex border-b border-slate-200">
+      <button 
+        @click="mode = 'webcam'"
+        class="flex-1 py-3 text-sm font-bold flex items-center justify-center gap-2 transition-colors"
+        :class="mode === 'webcam' ? 'bg-white text-indigo-600 border-b-2 border-indigo-600' : 'text-slate-500 hover:text-slate-700'"
+      >
+        <VideoCameraIcon class="w-5 h-5" />
+        Usar Webcam
+      </button>
+      <button 
+        @click="activatePhoneMode"
+        class="flex-1 py-3 text-sm font-bold flex items-center justify-center gap-2 transition-colors"
+        :class="mode === 'phone' ? 'bg-white text-indigo-600 border-b-2 border-indigo-600' : 'text-slate-500 hover:text-slate-700'"
+      >
+        <DevicePhoneMobileIcon class="w-5 h-5" />
+        Usar Celular
+      </button>
     </div>
 
-    <div v-if="cameraError" class="text-xs text-rose-700 bg-rose-50 border border-rose-100 p-2 rounded-lg">
-      {{ cameraError }}
-    </div>
-
-    <div v-show="scanning" class="rounded-lg overflow-hidden border border-slate-200 bg-slate-50">
-      <video ref="videoEl" class="w-full h-52 object-cover" muted playsinline></video>
-    </div>
-
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-      <div>
-        <label class="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1">
-          Pegar texto/URL del QR (opcional)
-        </label>
-        <div class="flex gap-2">
-          <input
-            v-model="manualText"
-            class="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
-            placeholder="https://verificacfdi.facturaelectronica.sat.gob.mx/default.aspx?id=..."
-          />
-          <button
-            @click="submitText(manualText)"
-            class="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-bold hover:bg-indigo-700"
-          >
-            Prefill
-          </button>
-        </div>
-      </div>
-
-      <div class="border border-slate-200 rounded-lg p-3 bg-slate-50">
-        <div class="flex items-center justify-between">
-          <div class="font-bold text-slate-800 text-sm">Usar celular</div>
-          <button
-            @click="createPhoneLink"
-            class="px-3 py-1.5 rounded-lg bg-white border border-slate-300 text-xs font-bold hover:bg-slate-100"
-            :disabled="phoneBusy"
-          >
-            {{ phoneBusy ? 'Generando…' : 'Generar link' }}
-          </button>
-        </div>
-
-        <div v-if="phoneScanUrl" class="mt-2 space-y-2">
-          <div class="text-xs text-slate-600 break-all">
-            <span class="font-semibold">Link:</span>
-            <a :href="phoneScanUrl" target="_blank" class="text-indigo-700 underline font-semibold ml-1">
-              abrir
-            </a>
+    <div class="p-6">
+      <!-- WEBCAM MODE -->
+      <div v-if="mode === 'webcam'" class="space-y-4">
+        <div class="relative bg-black rounded-xl overflow-hidden aspect-video flex items-center justify-center">
+          <video v-show="scanning" ref="videoEl" class="w-full h-full object-cover"></video>
+          
+          <div v-if="!scanning" class="text-center p-6">
+            <VideoCameraIcon class="w-12 h-12 text-slate-500 mx-auto mb-2" />
+            <p class="text-slate-400 text-sm">Cámara desactivada</p>
           </div>
 
-          <div v-if="phoneQrDataUrl" class="flex items-center gap-3">
-            <img :src="phoneQrDataUrl" class="w-24 h-24 bg-white p-1 rounded border border-slate-200" alt="QR phone link" />
-            <div class="text-xs text-slate-600">
-              Escanéalo con el celular para abrir la cámara y enviar los datos aquí automáticamente.
-              <div class="mt-2">
-                <span class="font-semibold">Estado:</span>
-                <span class="ml-1">{{ phoneStatus }}</span>
-              </div>
+          <div v-if="cameraError" class="absolute inset-0 bg-slate-900 flex items-center justify-center p-6 text-center">
+            <p class="text-rose-400 text-sm">{{ cameraError }}</p>
+          </div>
+        </div>
+
+        <div class="flex justify-center">
+          <button 
+            v-if="!scanning" 
+            @click="startCamera" 
+            class="bg-slate-900 text-white px-6 py-2 rounded-full font-bold shadow-lg hover:bg-slate-800 transition"
+          >
+            Activar Cámara
+          </button>
+          <button 
+            v-else 
+            @click="stopCamera" 
+            class="bg-white border border-slate-300 text-slate-700 px-6 py-2 rounded-full font-bold hover:bg-slate-50 transition"
+          >
+            Detener
+          </button>
+        </div>
+      </div>
+
+      <!-- PHONE MODE -->
+      <div v-else class="text-center space-y-6">
+        <div v-if="phoneStatus === 'idle' || phoneStatus === 'waiting'">
+          <h3 class="font-bold text-slate-800 text-lg">Convierte tu celular en escáner</h3>
+          <p class="text-slate-500 text-sm mb-4">Escanea este código para abrir la cámara en tu teléfono.</p>
+          
+          <div class="flex justify-center my-4">
+            <div v-if="phoneQrDataUrl" class="p-4 bg-white rounded-xl shadow-sm border border-slate-100">
+               <img :src="phoneQrDataUrl" class="w-48 h-48 mix-blend-multiply" />
+            </div>
+            <div v-else class="w-48 h-48 flex items-center justify-center">
+              <div class="animate-spin w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full"></div>
             </div>
           </div>
 
-          <div v-if="phoneError" class="text-xs text-rose-700">
-            {{ phoneError }}
+          <div class="flex items-center justify-center gap-2 text-sm text-indigo-600 font-medium animate-pulse">
+            <span class="relative flex h-3 w-3">
+              <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+              <span class="relative inline-flex rounded-full h-3 w-3 bg-indigo-500"></span>
+            </span>
+            Esperando conexión del teléfono...
           </div>
         </div>
 
-        <div v-else class="text-xs text-slate-500 mt-2">
-          Útil si la PC no tiene cámara.
+        <div v-else-if="phoneStatus === 'received'" class="py-10">
+          <div class="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-4">
+            <CheckIcon class="w-8 h-8" />
+          </div>
+          <h3 class="font-bold text-slate-900 text-xl">¡Datos Recibidos!</h3>
+          <p class="text-slate-500">La información del CFDI se ha cargado.</p>
+        </div>
+
+        <div v-else-if="phoneStatus === 'expired'" class="py-6">
+           <p class="text-rose-600 font-bold">El código expiró.</p>
+           <button @click="activatePhoneMode" class="mt-2 text-indigo-600 underline">Generar nuevo</button>
         </div>
       </div>
     </div>
@@ -93,128 +96,86 @@
 </template>
 
 <script setup lang="ts">
+import { VideoCameraIcon, DevicePhoneMobileIcon, CheckIcon } from '@heroicons/vue/24/solid';
 import QRCode from 'qrcode';
 
-const emit = defineEmits<{
-  (e: 'prefill', data: any): void;
-  (e: 'debug', data: any): void;
-}>();
+const emit = defineEmits<{ (e: 'prefill', data: any): void }>();
 
+const mode = ref<'webcam' | 'phone'>('webcam');
 const scanning = ref(false);
-const cameraError = ref('');
 const videoEl = ref<HTMLVideoElement | null>(null);
-const manualText = ref('');
-
+const cameraError = ref('');
 let controls: any = null;
 
+// Phone Logic
+const phoneStatus = ref<'idle' | 'waiting' | 'received' | 'expired'>('idle');
+const phoneQrDataUrl = ref('');
+let pollTimer: any = null;
+
+// --- WEBCAM LOGIC ---
 async function startCamera() {
   cameraError.value = '';
   scanning.value = true;
-
   try {
     const { BrowserMultiFormatReader } = await import('@zxing/browser');
     const reader = new BrowserMultiFormatReader();
-
-    // decodeFromVideoDevice returns controls via promise in newer versions; callback gets result continuously
-    await reader.decodeFromVideoDevice(
-      undefined,
-      videoEl.value!,
-      async (result: any, err: any) => {
-        if (result?.getText) {
-          const text = result.getText();
-          stopCamera(reader);
-          await submitText(text);
-        }
+    await reader.decodeFromVideoDevice(undefined, videoEl.value!, (res: any) => {
+      if (res?.getText) {
+        processText(res.getText());
+        stopCamera();
       }
-    );
-
-    // If version returns controls, keep it (some versions provide stop via reader.reset()).
+    });
     controls = reader;
   } catch (e: any) {
     scanning.value = false;
-    cameraError.value =
-      e?.message ||
-      'No se pudo iniciar la cámara (permiso denegado o sin dispositivo).';
+    cameraError.value = "No se pudo acceder a la cámara.";
   }
 }
 
-function stopCamera(readerArg?: any) {
+function stopCamera() {
   scanning.value = false;
-  try {
-    const r = readerArg || controls;
-    if (r?.reset) r.reset();
-  } catch {}
+  if (controls?.reset) controls.reset();
   controls = null;
 }
 
-async function submitText(text: string) {
-  const t = String(text || '').trim();
-  if (!t) return;
-
-  const res: any = await $fetch('/api/cfdi/parse', {
-    method: 'POST',
-    body: { text: t }
-  });
-
-  emit('debug', res);
-  emit('prefill', res?.prefill || {});
-}
-
-// --- Phone handoff ---
-const phoneBusy = ref(false);
-const phoneToken = ref('');
-const phoneScanUrl = ref('');
-const phoneQrDataUrl = ref('');
-const phoneStatus = ref<'idle' | 'waiting' | 'received' | 'expired'>('idle');
-const phoneError = ref('');
-let pollTimer: any = null;
-
-async function createPhoneLink() {
-  phoneBusy.value = true;
-  phoneError.value = '';
+// --- PHONE LOGIC ---
+async function activatePhoneMode() {
+  mode.value = 'phone';
   phoneStatus.value = 'idle';
-  phoneToken.value = '';
-  phoneScanUrl.value = '';
-  phoneQrDataUrl.value = '';
   if (pollTimer) clearInterval(pollTimer);
+  stopCamera(); // Ensure webcam is off
 
   try {
+    // Generate session
     const s: any = await $fetch('/api/qr-session/create', { method: 'POST' });
-    phoneToken.value = s.token;
-    phoneScanUrl.value = s.scanUrl;
-
-    phoneQrDataUrl.value = await QRCode.toDataURL(phoneScanUrl.value, {
-      margin: 1,
-      width: 256
-    });
-
+    phoneQrDataUrl.value = await QRCode.toDataURL(s.scanUrl, { width: 300, margin: 2, color: { dark: '#1e293b' } });
     phoneStatus.value = 'waiting';
 
+    // Poll
     pollTimer = setInterval(async () => {
       try {
-        const r: any = await $fetch('/api/qr-session/poll', {
-          params: { token: phoneToken.value }
-        });
-
+        const r: any = await $fetch('/api/qr-session/poll', { params: { token: s.token } });
         if (r.status === 'READY') {
           phoneStatus.value = 'received';
           clearInterval(pollTimer);
-          pollTimer = null;
-
-          emit('debug', r.payload);
+          // Apply data
           emit('prefill', r.payload?.prefill || {});
+          // Auto switch back or just flash success
+          setTimeout(() => { mode.value = 'webcam'; }, 2000); 
         } else if (r.status === 'EXPIRED') {
           phoneStatus.value = 'expired';
           clearInterval(pollTimer);
-          pollTimer = null;
         }
       } catch {}
-    }, 1200);
-  } catch (e: any) {
-    phoneError.value = e?.data?.statusMessage || 'No se pudo generar el link.';
-  } finally {
-    phoneBusy.value = false;
+    }, 1500);
+  } catch (e) {
+    console.error(e);
   }
+}
+
+async function processText(text: string) {
+  const res: any = await $fetch('/api/cfdi/parse', { method: 'POST', body: { text } });
+  emit('prefill', res.prefill);
 }
 
 onBeforeUnmount(() => {

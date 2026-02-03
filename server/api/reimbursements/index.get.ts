@@ -1,90 +1,109 @@
 import { useDb } from '~/server/utils/db';
 import { requireAuth } from '~/server/utils/auth';
 
-const ALL_STATUSES = [
-  'DRAFT',
-  'PENDING_OPS_REVIEW',
-  'PENDING_FISCAL_REVIEW',
-  'RETURNED',
-  'APPROVED',
-  'PROCESSED'
-];
-
-const DEFAULT_STATUS_BY_ROLE: Record<string, string | null> = {
-  ADMIN_PLANTEL: null,
-  REVISOR_OPS: 'PENDING_OPS_REVIEW',
-  REVISOR_FISCAL: 'PENDING_FISCAL_REVIEW',
-  TESORERIA: 'APPROVED',
-  SUPER_ADMIN: null
-};
-
-const ALLOWED_STATUS_BY_ROLE: Record<string, string[] | 'ALL'> = {
-  ADMIN_PLANTEL: 'ALL',
-  REVISOR_OPS: ['PENDING_OPS_REVIEW'],
-  REVISOR_FISCAL: ['PENDING_FISCAL_REVIEW'],
-  TESORERIA: ['APPROVED', 'PROCESSED'],
-  SUPER_ADMIN: 'ALL'
-};
+function mapStatus(s: string): string {
+  switch (s) {
+    case 'DRAFT': return 'borrador';
+    case 'PENDING_OPS_REVIEW': return 'en_revision';
+    case 'PENDING_FISCAL_REVIEW': return 'en_revision';
+    case 'RETURNED': return 'rechazado';
+    case 'APPROVED': return 'aprobado';
+    case 'PROCESSED': return 'pagado';
+    default: return 'borrador';
+  }
+}
 
 export default defineEventHandler(async (event) => {
   const user = requireAuth(event);
-  const query = getQuery(event);
-
-  let status = query.status ? String(query.status) : null;
-
-  // Default queue per role
-  if (!status) {
-    const def = DEFAULT_STATUS_BY_ROLE[user.role_name] ?? null;
-    if (def) status = def;
-  }
-
-  // Validate status value (if provided)
-  if (status && !ALL_STATUSES.includes(status)) {
-    throw createError({ statusCode: 400, statusMessage: 'Estatus inválido' });
-  }
-
-  // Role-based restriction (prevents e.g. ADMIN_PLANTEL listing global queues)
-  const allowed = ALLOWED_STATUS_BY_ROLE[user.role_name] ?? [];
-  if (allowed !== 'ALL') {
-    if (status && !allowed.includes(status)) {
-      throw createError({ statusCode: 403, statusMessage: 'No autorizado para ver este estatus' });
-    }
-  }
+  const q = getQuery(event);
+  
+  const search = String(q.q || '').trim().toLowerCase();
+  const estadoFilter = String(q.estado || '').trim();
+  const rawStatusFilter = String(q.status || '').trim(); // For Ops/Fiscal specific queries
 
   const db = await useDb();
 
   let sql = `
     SELECT 
-      r.*,
+      r.id, r.status, r.reimbursement_date, r.total_amount, r.rejection_reason, r.created_at,
       u.nombre as solicitante_nombre,
-      u.email as solicitante_email,
-      p.nombre as plantel_nombre,
-      p.codigo as plantel_codigo
+      p.nombre as plantel_nombre
     FROM reimbursements r
     JOIN users u ON r.user_id = u.id
     LEFT JOIN planteles p ON r.plantel_id = p.id
   `;
 
-  const params: any[] = [];
   const conditions: string[] = [];
+  const params: any[] = [];
 
-  if (status) {
-    conditions.push('r.status = ?');
-    params.push(status);
-  }
-
-  // Scope requesters to their own records
   if (user.role_name === 'ADMIN_PLANTEL') {
     conditions.push('r.user_id = ?');
     params.push(user.id);
   }
 
-  if (conditions.length > 0) {
-    sql += ' WHERE ' + conditions.join(' AND ');
+  if (estadoFilter) {
+    if (estadoFilter === 'borrador') conditions.push("r.status = 'DRAFT'");
+    else if (estadoFilter === 'en_revision') conditions.push("r.status IN ('PENDING_OPS_REVIEW', 'PENDING_FISCAL_REVIEW')");
+    else if (estadoFilter === 'aprobado') conditions.push("r.status = 'APPROVED'");
+    else if (estadoFilter === 'rechazado') conditions.push("r.status = 'RETURNED'");
+    else if (estadoFilter === 'pagado') conditions.push("r.status = 'PROCESSED'");
   }
 
+  if (rawStatusFilter) {
+    conditions.push('r.status = ?');
+    params.push(rawStatusFilter);
+  }
+
+  if (conditions.length) sql += ' WHERE ' + conditions.join(' AND ');
   sql += ' ORDER BY r.created_at DESC LIMIT 200';
 
-  const [rows] = await db.execute(sql, params);
-  return rows;
+  const [rows]: any = await db.execute(sql, params);
+  if (!rows.length) return { items: [] };
+
+  const ids = rows.map((r: any) => r.id);
+  const placeholders = ids.map(() => '?').join(',');
+  const [itemsRows]: any = await db.execute(
+    `SELECT * FROM reimbursement_items WHERE reimbursement_id IN (${placeholders})`, ids
+  );
+
+  const itemsMap: Record<number, any[]> = {};
+  for (const item of itemsRows) {
+    if (!itemsMap[item.reimbursement_id]) itemsMap[item.reimbursement_id] = [];
+    itemsMap[item.reimbursement_id].push(item);
+  }
+
+  const results = rows.map((r: any) => {
+    const myItems = itemsMap[r.id] || [];
+    
+    if (search) {
+      const haystack = [
+        r.id, r.plantel_nombre, r.solicitante_nombre,
+        ...myItems.map((i: any) => `${i.provider} ${i.concept} ${i.invoice_number}`)
+      ].join(' ').toLowerCase();
+      if (!haystack.includes(search)) return null;
+    }
+
+    return {
+      id: String(r.id),
+      folio: `R-${String(r.id).padStart(5, '0')}`,
+      plantel: r.plantel_nombre,
+      solicitante: r.solicitante_nombre,
+      fechaISO: r.reimbursement_date || r.created_at,
+      estado: mapStatus(r.status),
+      total: Number(r.total_amount),
+      notas: r.rejection_reason || null,
+      file_url: myItems[0]?.file_url || null,
+      conceptos: myItems.map((i: any) => ({
+        id: String(i.id),
+        invoice_date: i.invoice_date,
+        invoice_number: i.invoice_number,
+        provider: i.provider,
+        concept: i.concept,
+        description: i.description,
+        amount: Number(i.amount)
+      }))
+    };
+  }).filter(Boolean);
+
+  return { items: results };
 });

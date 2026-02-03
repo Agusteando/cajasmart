@@ -1,91 +1,90 @@
 import { readMultipartFormData } from 'h3';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import { useDb } from '~/server/utils/db';
 import { requireAuth } from '~/server/utils/auth';
 import { createAuditLog } from '~/server/utils/audit';
 import { notifyRoleUsers } from '~/server/utils/notifications';
-import { randomUUID } from 'node:crypto';
-import fs from 'node:fs/promises';
-import path from 'node:path';
+
+function bad(message: string, statusCode = 400) {
+  throw createError({ statusCode, statusMessage: message });
+}
+
+async function saveUpload(file: { filename?: string; data: any }) {
+  const cfg = useRuntimeConfig();
+  const uploadsDir = path.resolve(process.cwd(), cfg.uploadDir || './public/uploads');
+  await fs.mkdir(uploadsDir, { recursive: true });
+  const original = String(file.filename || 'archivo').trim() || 'archivo';
+  const safe = original.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const filename = `${Date.now()}_${Math.random().toString(16).slice(2)}_${safe}`;
+  await fs.writeFile(path.join(uploadsDir, filename), file.data);
+  return filename;
+}
 
 export default defineEventHandler(async (event) => {
   const user = requireAuth(event);
-
-  // Only Admin Plantel (Requester) or Super Admin can create
-  if (user.role_name !== 'ADMIN_PLANTEL' && user.role_name !== 'SUPER_ADMIN') {
-    throw createError({ statusCode: 403, statusMessage: 'No autorizado para crear solicitudes' });
-  }
-
-  if (!user.plantel_id) {
-    throw createError({ statusCode: 400, statusMessage: 'Usuario no tiene plantel asignado' });
-  }
-
-  const parts = await readMultipartFormData(event);
-  if (!parts) throw createError({ statusCode: 400, statusMessage: 'No data' });
-
-  const getField = (name: string) => parts.find((p) => p.name === name)?.data.toString() || '';
-
-  const invoiceDate = getField('date');
-  const invoiceNumber = getField('invoice');
-  const provider = getField('provider');
-  const amount = parseFloat(getField('amount'));
-  const concept = getField('concept');
-  const description = getField('desc');
-  const action = getField('action') || 'SUBMIT'; // 'DRAFT' or 'SUBMIT'
-
-  if (!amount || amount <= 0) {
-    throw createError({ statusCode: 400, statusMessage: 'Monto inválido' });
-  }
-
-  const filePart = parts.find((p) => p.name === 'file');
-  let fileUrl = '';
-
-  if (filePart && filePart.filename) {
-    const config = useRuntimeConfig();
-    const ext = path.extname(filePart.filename);
-    const safeName = `${randomUUID()}${ext}`;
-    const uploadDir = config.uploadDir || './public/uploads';
-    await fs.mkdir(uploadDir, { recursive: true });
-    await fs.writeFile(path.join(uploadDir, safeName), filePart.data);
-    fileUrl = safeName;
-  } else if (action === 'SUBMIT') {
-    throw createError({ statusCode: 400, statusMessage: 'Archivo de factura requerido' });
-  }
-
-  const status = action === 'DRAFT' ? 'DRAFT' : 'PENDING_OPS_REVIEW';
   const db = await useDb();
 
-  const [res]: any = await db.execute(
-    `
-    INSERT INTO reimbursements
-      (user_id, plantel_id, status, invoice_date, invoice_number, provider, concept, description, amount, file_url, created_at, updated_at)
-    VALUES
-      (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
-    `,
-    [user.id, user.plantel_id, status, invoiceDate, invoiceNumber, provider, concept, description, amount, fileUrl]
-  );
-
-  const newId = res.insertId;
-
-  await createAuditLog({
-    entityType: 'reimbursement',
-    entityId: newId,
-    action: 'CREATE',
-    toStatus: status,
-    actorUserId: user.id,
-    comment: `Creado como ${status}`
-  });
-
-  if (status === 'PENDING_OPS_REVIEW') {
-    await notifyRoleUsers(
-      'REVISOR_OPS',
-      'NEW_REQUEST',
-      'Nueva Solicitud',
-      `${user.nombre} ha enviado una solicitud de $${amount.toFixed(2)}`,
-      'reimbursement',
-      newId,
-      { url: '/ops', actorUserId: user.id }
-    );
+  let body: any = {};
+  const parts = (await readMultipartFormData(event)) || [];
+  for (const p of parts) {
+    if (!p?.name) continue;
+    if (p.name === 'file') continue;
+    body[p.name] = p.data.toString('utf8');
   }
 
-  return { success: true, id: newId };
+  let fileUrl: string | null = null;
+  const filePart = parts.find((p: any) => p?.name === 'file' && p?.data?.length);
+  if (filePart) fileUrl = await saveUpload(filePart as any);
+
+  if (body.conceptos && typeof body.conceptos === 'string') {
+    try { body.conceptos = JSON.parse(body.conceptos); } catch { bad('JSON inválido'); }
+  }
+
+  const plantelId = user.plantel_id; 
+  if (!plantelId && user.role_name === 'ADMIN_PLANTEL') bad('Sin plantel asignado.');
+
+  const conceptos = Array.isArray(body.conceptos) ? body.conceptos : [];
+  if (!conceptos.length) bad('Faltan conceptos.');
+
+  let totalAmount = 0;
+  for (const c of conceptos) {
+    const amt = Number(c.amount);
+    if (!Number.isFinite(amt) || amt <= 0) bad('Monto inválido.');
+    totalAmount += amt;
+  }
+
+  const fechaISO = body.fechaISO ? new Date(body.fechaISO).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
+  
+  const connection = await db.getConnection();
+  await connection.beginTransaction();
+
+  try {
+    const status = 'PENDING_OPS_REVIEW';
+    const [res]: any = await connection.execute(
+      `INSERT INTO reimbursements (user_id, plantel_id, status, reimbursement_date, total_amount, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NOW(), NOW())`,
+      [user.id, plantelId, status, fechaISO, totalAmount]
+    );
+    const reimbursementId = res.insertId;
+
+    for (const c of conceptos) {
+      await connection.execute(
+        `INSERT INTO reimbursement_items (reimbursement_id, invoice_date, invoice_number, provider, concept, description, amount, file_url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+        [reimbursementId, c.invoice_date || null, c.invoice_number || null, c.provider || null, c.concept || '', c.description || null, Number(c.amount), fileUrl]
+      );
+    }
+
+    await connection.commit();
+    
+    await createAuditLog({ entityType: 'reimbursement', entityId: reimbursementId, action: 'CREATE', toStatus: status, actorUserId: user.id });
+    await notifyRoleUsers('REVISOR_OPS', 'NEW_PENDING', 'Nueva Solicitud', `${user.nombre} envió solicitud por $${totalAmount.toFixed(2)}`, 'reimbursement', reimbursementId);
+
+    // Return format matching what UI expects (data: Reembolso)
+    return { ok: true, data: { id: String(reimbursementId), folio: `R-${String(reimbursementId).padStart(5,'0')}` } };
+  } catch (e) {
+    await connection.rollback();
+    throw createError({ statusCode: 500, statusMessage: 'Error DB' });
+  } finally {
+    connection.release();
+  }
 });
