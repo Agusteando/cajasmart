@@ -54,6 +54,14 @@
           Tesorería
         </NavLink>
 
+        <NavLink
+          v-if="user?.role_name === 'RH' || user?.role_name === 'SUPER_ADMIN'"
+          to="/rh"
+          icon="FolderOpenIcon"
+        >
+          Recursos Humanos
+        </NavLink>
+
         <NavLink to="/notificaciones" icon="BellIcon">Notificaciones</NavLink>
 
         <!-- Admin Section -->
