@@ -6,12 +6,14 @@ import { requireAuth } from '~/server/utils/auth';
 import { createAuditLog } from '~/server/utils/audit';
 import { notifyRoleUsers } from '~/server/utils/notifications';
 
-async function saveUpload(file: { filename?: string; data: any }) {
+async function saveUpload(file: { filename?: string; data: Buffer }) {
   const cfg = useRuntimeConfig();
-  const uploadsDir = path.resolve(process.cwd(), cfg.uploadDir || './public/uploads');
+  const uploadsDir = path.resolve(process.cwd(), String(cfg.uploadDir || './public/uploads'));
   await fs.mkdir(uploadsDir, { recursive: true });
+  
   const filename = `${Date.now()}_${Math.random().toString(16).slice(2)}_${(file.filename||'f').replace(/[^a-z0-9.]/gi,'_')}`;
-  await fs.writeFile(path.join(uploadsDir, filename), file.data);
+  const filePath = path.join(uploadsDir, filename);
+  await fs.writeFile(filePath, file.data);
   return filename;
 }
 
@@ -21,17 +23,28 @@ export default defineEventHandler(async (event) => {
 
   let body: any = {};
   const parts = (await readMultipartFormData(event)) || [];
+  let filePart: any = null;
+
   for (const p of parts) {
-    if (p.name !== 'file') body[p.name || ''] = p.data.toString('utf8');
+    if (p.name === 'file' && p.data && p.data.length > 0) {
+      filePart = p;
+    } else if (p.name) {
+      body[p.name] = p.data.toString('utf8');
+    }
   }
 
   const id = body.id;
   if(!id) throw createError({statusCode:400, statusMessage:'Falta ID'});
 
   let fileUrl: string | null = null;
-  const filePart = parts.find((p: any) => p?.name === 'file' && p?.data?.length);
-  if (filePart) fileUrl = await saveUpload(filePart as any);
-  else {
+  if (filePart) {
+    try {
+      fileUrl = await saveUpload(filePart as any);
+    } catch(e) {
+      console.error('Error saving file update', e);
+    }
+  } else {
+    // Keep existing if not replaced
     const [rows]: any = await db.execute('SELECT file_url FROM reimbursement_items WHERE reimbursement_id = ? LIMIT 1', [id]);
     fileUrl = rows?.[0]?.file_url;
   }
@@ -55,6 +68,7 @@ export default defineEventHandler(async (event) => {
       [totalAmount, fechaISO, id]
     );
 
+    // Replace items logic (simplified for this app structure)
     await connection.execute('DELETE FROM reimbursement_items WHERE reimbursement_id = ?', [id]);
 
     for (const c of conceptos) {

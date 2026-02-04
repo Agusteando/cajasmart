@@ -17,9 +17,14 @@ export default defineEventHandler(async (event) => {
      FROM planteles
      ORDER BY nombre ASC`
   );
+  
+  const [razones]: any = await db.execute(
+    `SELECT id, nombre FROM razones_sociales ORDER BY nombre ASC`
+  );
 
   return {
     roles: roles || [],
-    planteles: planteles || []
+    planteles: planteles || [],
+    razones_sociales: razones || []
   };
 });
