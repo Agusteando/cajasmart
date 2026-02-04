@@ -11,7 +11,11 @@ async function saveUpload(file: { filename?: string; data: Buffer }) {
   const uploadsDir = path.resolve(process.cwd(), String(cfg.uploadDir || './public/uploads'));
   await fs.mkdir(uploadsDir, { recursive: true });
   
-  const filename = `${Date.now()}_${Math.random().toString(16).slice(2)}_${(file.filename||'f').replace(/[^a-z0-9.]/gi,'_')}`;
+  const original = String(file.filename || 'f').trim();
+  // Fix: Safe filename
+  const safe = original.replace(/[^a-z0-9.]/gi, '_').slice(0, 100);
+  const filename = `${Date.now()}_${Math.random().toString(16).slice(2)}_${safe}`;
+  
   const filePath = path.join(uploadsDir, filename);
   await fs.writeFile(filePath, file.data);
   return filename;
@@ -63,6 +67,7 @@ export default defineEventHandler(async (event) => {
   await connection.beginTransaction();
 
   try {
+    // Note: We generally don't update plantel_id on edit to avoid moving items between budgets accidentally
     await connection.execute(
       `UPDATE reimbursements SET total_amount = ?, reimbursement_date = ?, status = 'PENDING_OPS_REVIEW', rejection_reason = NULL, returned_by = NULL, updated_at = NOW() WHERE id = ?`,
       [totalAmount, fechaISO, id]
@@ -83,8 +88,9 @@ export default defineEventHandler(async (event) => {
     await notifyRoleUsers('REVISOR_OPS', 'NEW_REQUEST', 'Solicitud Corregida', `${user.nombre} corrigió #${id}`, 'reimbursement', Number(id));
 
     return { ok: true, id };
-  } catch (e) {
+  } catch (e: any) {
     await connection.rollback();
+    console.error('Error Update:', e.message);
     throw createError({ statusCode: 500, statusMessage: 'Error Update' });
   } finally {
     connection.release();

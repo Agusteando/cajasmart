@@ -19,7 +19,8 @@ async function saveUpload(file: { filename?: string; data: Buffer }) {
   await fs.mkdir(uploadsDir, { recursive: true });
 
   const original = String(file.filename || 'archivo').trim() || 'archivo';
-  const safe = original.replace(/[^a-zA-Z0-9._-]/g, '_');
+  // Fix: Limit filename length and characters for DB safety
+  const safe = original.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 100);
   const filename = `${Date.now()}_${Math.random().toString(16).slice(2)}_${safe}`;
   
   const filePath = path.join(uploadsDir, filename);
@@ -62,8 +63,21 @@ export default defineEventHandler(async (event) => {
     try { body.conceptos = JSON.parse(body.conceptos); } catch { bad('JSON inválido'); }
   }
 
-  const plantelId = user.plantel_id; 
-  if (!plantelId && user.role_name === 'ADMIN_PLANTEL') bad('Sin plantel asignado.');
+  // FIX: Resolve Plantel ID
+  // If user has a locked plantel (ADMIN_PLANTEL), use it.
+  // Otherwise (SUPER_ADMIN), allow selection from body.
+  let plantelId = user.plantel_id; 
+  if (!plantelId && body.plantel_id) {
+    const parsed = Number(body.plantel_id);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      plantelId = parsed;
+    }
+  }
+
+  if (!plantelId) {
+    // If we still don't have a plantel ID, we cannot insert because DB requires it
+    bad('Es necesario seleccionar un Plantel.');
+  }
 
   const conceptos = Array.isArray(body.conceptos) ? body.conceptos : [];
   if (!conceptos.length) bad('Faltan conceptos.');
@@ -82,6 +96,7 @@ export default defineEventHandler(async (event) => {
 
   try {
     const status = 'PENDING_OPS_REVIEW';
+    // FIX: Ensure plantelId is passed correctly
     const [res]: any = await connection.execute(
       `INSERT INTO reimbursements (user_id, plantel_id, status, reimbursement_date, total_amount, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NOW(), NOW())`,
       [user.id, plantelId, status, fechaISO, totalAmount]
@@ -97,13 +112,20 @@ export default defineEventHandler(async (event) => {
 
     await connection.commit();
     
-    await createAuditLog({ entityType: 'reimbursement', entityId: reimbursementId, action: 'CREATE', toStatus: status, actorUserId: user.id });
-    await notifyRoleUsers('REVISOR_OPS', 'NEW_PENDING', 'Nueva Solicitud', `${user.nombre} envió solicitud por $${totalAmount.toFixed(2)}`, 'reimbursement', reimbursementId);
+    // Audit & Notify outside transaction critical path
+    try {
+      await createAuditLog({ entityType: 'reimbursement', entityId: reimbursementId, action: 'CREATE', toStatus: status, actorUserId: user.id });
+      await notifyRoleUsers('REVISOR_OPS', 'NEW_PENDING', 'Nueva Solicitud', `${user.nombre} envió solicitud por $${totalAmount.toFixed(2)}`, 'reimbursement', reimbursementId);
+    } catch (err) {
+      console.error('Notification error (ignored):', err);
+    }
 
     return { ok: true, data: { id: String(reimbursementId), folio: `R-${String(reimbursementId).padStart(5,'0')}` } };
-  } catch (e) {
+  } catch (e: any) {
     await connection.rollback();
-    throw createError({ statusCode: 500, statusMessage: 'Error DB' });
+    // Log detailed SQL error for debugging
+    console.error('Error DB Insert:', e.message, e.code, e.sqlMessage);
+    throw createError({ statusCode: 500, statusMessage: 'Error DB: ' + (e.sqlMessage || e.message) });
   } finally {
     connection.release();
   }

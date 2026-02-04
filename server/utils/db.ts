@@ -41,7 +41,10 @@ export const useDb = async (): Promise<Pool> => {
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0,
-    dateStrings: true
+    dateStrings: true,
+    // Fix for 502 Bad Gateway / Connection drops
+    enableKeepAlive: true,
+    keepAliveInitialDelay: 0
   });
 
   return pool;
