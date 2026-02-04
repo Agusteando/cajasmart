@@ -19,9 +19,9 @@ export async function createNotification(input: NotificationInput) {
     const [res]: any = await db.execute(
       `
       INSERT INTO notifications
-        (user_id, type, title, message, reference_type, reference_id, url, actor_user_id, created_at)
+        (user_id, type, title, message, reference_type, reference_id, url, actor_user_id, is_read, created_at)
       VALUES
-        (?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        (?, ?, ?, ?, ?, ?, ?, ?, 0, NOW())
       `,
       [
         input.userId,
@@ -64,7 +64,7 @@ export async function createNotificationsBulk(inputs: NotificationInput[]) {
   const params: any[] = [];
 
   for (const n of inputs) {
-    valuesSql.push('(?, ?, ?, ?, ?, ?, ?, ?, NOW())');
+    valuesSql.push('(?, ?, ?, ?, ?, ?, ?, ?, 0, NOW())');
     params.push(
       n.userId,
       n.type,
@@ -81,23 +81,28 @@ export async function createNotificationsBulk(inputs: NotificationInput[]) {
     const [res]: any = await db.execute(
       `
       INSERT INTO notifications
-        (user_id, type, title, message, reference_type, reference_id, url, actor_user_id, created_at)
+        (user_id, type, title, message, reference_type, reference_id, url, actor_user_id, is_read, created_at)
       VALUES ${valuesSql.join(',')}
       `,
       params
     );
 
     // Push best-effort per user
-    for (const n of inputs) {
-      await sendPushToUser(n.userId, {
+    // In a high-scale app, we would queue this. For now, Promise.all is acceptable.
+    const pushPromises = inputs.map(n => 
+      sendPushToUser(n.userId, {
         title: n.title,
         body: n.message,
         url: n.url || '/notificaciones',
         type: n.type,
         referenceType: n.referenceType || undefined,
         referenceId: n.referenceId || undefined
-      });
-    }
+      })
+    );
+    
+    // Don't await push to not block the response time significantly, 
+    // or await if critical. We'll await but catch errors internally in sendPushToUser.
+    await Promise.allSettled(pushPromises);
 
     return { inserted: Number(res?.affectedRows || inputs.length) };
   } catch (e) {
@@ -107,9 +112,10 @@ export async function createNotificationsBulk(inputs: NotificationInput[]) {
 }
 
 /**
- * Role-targeted notifications: materialize per user (so each user sees only their rows).
- * Only ACTIVE users receive notifications.
- * Optional plantel scoping supported.
+ * Role-targeted notifications: materialize per user.
+ * - Only ACTIVE users.
+ * - Filters out the actor (to avoid self-notification).
+ * - Handles Plantel Scoping: If plantelId is provided, it targets users of that plantel OR global users (plantel_id IS NULL).
  */
 export async function notifyRoleUsers(
   roleName: string,
@@ -125,8 +131,9 @@ export async function notifyRoleUsers(
   const params: any[] = [roleName];
   let plantelSql = '';
 
+  // Improved Logic: If filtering by Plantel, include the specific plantel AND Global users (NULL)
   if (opts?.plantelId) {
-    plantelSql = ' AND u.plantel_id = ? ';
+    plantelSql = ' AND (u.plantel_id = ? OR u.plantel_id IS NULL) ';
     params.push(opts.plantelId);
   }
 
@@ -142,9 +149,14 @@ export async function notifyRoleUsers(
     params
   );
 
-  const userIds: number[] = (rows || [])
+  let userIds: number[] = (rows || [])
     .map((x: any) => Number(x.id))
     .filter((n: any) => Number.isFinite(n) && n > 0);
+
+  // Filter out the actor to prevent self-notification
+  if (opts?.actorUserId) {
+    userIds = userIds.filter(id => id !== Number(opts.actorUserId));
+  }
 
   if (!userIds.length) return { deliveredTo: 0 };
 

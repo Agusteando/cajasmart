@@ -123,6 +123,7 @@ export default defineEventHandler(async (event) => {
   switch (action) {
     case 'APPROVE':
       if (newStatus === 'PENDING_FISCAL_REVIEW') {
+        // FIX: Passed actorUserId
         await notifyRoleUsers(
           'REVISOR_FISCAL',
           'NEW_PENDING',
@@ -133,6 +134,7 @@ export default defineEventHandler(async (event) => {
           { url: '/fiscal', actorUserId: user.id }
         );
       } else if (newStatus === 'APPROVED') {
+        // FIX: Passed actorUserId
         await notifyRoleUsers(
           'TESORERIA',
           'APPROVED',

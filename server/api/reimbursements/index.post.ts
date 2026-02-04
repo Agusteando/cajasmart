@@ -64,8 +64,6 @@ export default defineEventHandler(async (event) => {
   }
 
   // FIX: Resolve Plantel ID
-  // If user has a locked plantel (ADMIN_PLANTEL), use it.
-  // Otherwise (SUPER_ADMIN), allow selection from body.
   let plantelId = user.plantel_id; 
   if (!plantelId && body.plantel_id) {
     const parsed = Number(body.plantel_id);
@@ -75,7 +73,6 @@ export default defineEventHandler(async (event) => {
   }
 
   if (!plantelId) {
-    // If we still don't have a plantel ID, we cannot insert because DB requires it
     bad('Es necesario seleccionar un Plantel.');
   }
 
@@ -96,7 +93,6 @@ export default defineEventHandler(async (event) => {
 
   try {
     const status = 'PENDING_OPS_REVIEW';
-    // FIX: Ensure plantelId is passed correctly
     const [res]: any = await connection.execute(
       `INSERT INTO reimbursements (user_id, plantel_id, status, reimbursement_date, total_amount, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NOW(), NOW())`,
       [user.id, plantelId, status, fechaISO, totalAmount]
@@ -112,10 +108,20 @@ export default defineEventHandler(async (event) => {
 
     await connection.commit();
     
-    // Audit & Notify outside transaction critical path
+    // Audit & Notify
     try {
       await createAuditLog({ entityType: 'reimbursement', entityId: reimbursementId, action: 'CREATE', toStatus: status, actorUserId: user.id });
-      await notifyRoleUsers('REVISOR_OPS', 'NEW_PENDING', 'Nueva Solicitud', `${user.nombre} envió solicitud por $${totalAmount.toFixed(2)}`, 'reimbursement', reimbursementId);
+      
+      // FIX: Pass actorUserId to prevent self-notifications
+      await notifyRoleUsers(
+        'REVISOR_OPS', 
+        'NEW_PENDING', 
+        'Nueva Solicitud', 
+        `${user.nombre} envió solicitud por $${totalAmount.toFixed(2)}`, 
+        'reimbursement', 
+        reimbursementId,
+        { url: '/ops', actorUserId: user.id }
+      );
     } catch (err) {
       console.error('Notification error (ignored):', err);
     }
@@ -123,7 +129,6 @@ export default defineEventHandler(async (event) => {
     return { ok: true, data: { id: String(reimbursementId), folio: `R-${String(reimbursementId).padStart(5,'0')}` } };
   } catch (e: any) {
     await connection.rollback();
-    // Log detailed SQL error for debugging
     console.error('Error DB Insert:', e.message, e.code, e.sqlMessage);
     throw createError({ statusCode: 500, statusMessage: 'Error DB: ' + (e.sqlMessage || e.message) });
   } finally {
