@@ -1,413 +1,249 @@
 <script setup lang="ts">
 import { 
-  DocumentTextIcon, BanknotesIcon, ClockIcon, XCircleIcon, 
-  ChartBarIcon, UserGroupIcon, BuildingOfficeIcon, FunnelIcon,
-  CalendarIcon, ArrowTrendingUpIcon, CheckCircleIcon
+  ArrowTrendingUpIcon, 
+  CalendarIcon, 
+  ArrowPathIcon,
+  ExclamationCircleIcon,
+  CheckCircleIcon,
+  ClockIcon
 } from '@heroicons/vue/24/outline';
 import { useUserCookie } from '~/composables/useUserCookie';
 
-// PROTECT THIS PAGE ON SERVER SIDE
 definePageMeta({ middleware: 'auth' });
-
 const user = useUserCookie();
+
 const loading = ref(true);
+const month = ref(new Date().toISOString().slice(0, 7));
+const data = ref<any>({ swimlanes: [], totalDaysInMonth: 30 });
 
-// -- SUPER ADMIN BI STATE --
-const kpi = ref<any>({});
-const timeline = ref<any[]>([]);
-const statusBreakdown = ref<any[]>([]);
-const plantelStats = ref<any[]>([]);
-const plantelesList = ref<any[]>([]);
-
-const filters = ref({
-  month: new Date().toISOString().slice(0, 7),
-  plantelId: ''
-});
-
-// -- NORMAL USER STATE --
-const normalKpi = ref<any>({});
-const normalCharts = ref<any[]>([]);
-
-// -- MODAL STATE (For Drill Down) --
-const showDetailModal = ref(false);
-const selectedItem = ref<any>(null);
-
-// HELPER: Format Money
-const formatMoney = (val: any) => `$${Number(val || 0).toLocaleString('es-MX', { minimumFractionDigits: 2 })}`;
-
-// HELPER: Calculate Percentage for Bars
-const calculatePercent = (val: number, max: number) => max ? (Number(val) / max) * 100 : 0;
-
-// HELPER: Stage Logic for Gantt/Progress
-const getStageInfo = (status: string) => {
-  switch(status) {
-    case 'DRAFT': return { pct: 10, color: 'bg-slate-300', label: 'Borrador' };
-    case 'PENDING_OPS_REVIEW': return { pct: 35, color: 'bg-amber-400', label: 'Rev. Operativa' };
-    case 'PENDING_FISCAL_REVIEW': return { pct: 60, color: 'bg-blue-400', label: 'Rev. Fiscal' };
-    case 'APPROVED': return { pct: 85, color: 'bg-indigo-500', label: 'Por Pagar' };
-    case 'PROCESSED': return { pct: 100, color: 'bg-emerald-500', label: 'Pagado' };
-    case 'RETURNED': return { pct: 100, color: 'bg-rose-500', label: 'Rechazado' };
-    default: return { pct: 0, color: 'bg-slate-200', label: 'Desconocido' };
+// -- STAGE DEFINITIONS --
+const getStageStyle = (status: string, lagDays: number) => {
+  // Base Colors
+  let bg = 'bg-slate-300'; // Draft/Unknown
+  let border = 'border-slate-400';
+  
+  if (status === 'PENDING_OPS_REVIEW') {
+    bg = 'bg-amber-400';
+    border = 'border-amber-500';
+  } else if (status === 'PENDING_FISCAL_REVIEW') {
+    bg = 'bg-blue-400';
+    border = 'border-blue-500';
+  } else if (status === 'APPROVED') {
+    bg = 'bg-indigo-500';
+    border = 'border-indigo-600';
+  } else if (status === 'PROCESSED') {
+    bg = 'bg-emerald-500';
+    border = 'border-emerald-600';
+  } else if (status === 'RETURNED') {
+    bg = 'bg-rose-500';
+    border = 'border-rose-600';
   }
+
+  // Lagging Indicator (If pending and > 5 days, make it look urgent)
+  const isPending = ['PENDING_OPS_REVIEW', 'PENDING_FISCAL_REVIEW', 'APPROVED'].includes(status);
+  const isLagging = isPending && lagDays > 5;
+  
+  return {
+    classes: `${bg} border-l-2 ${border} ${isLagging ? 'animate-pulse shadow-md shadow-red-200' : ''}`,
+    isLagging
+  };
 };
 
-// FETCH DATA
-const loadDashboard = async () => {
+const fetchBI = async () => {
   loading.value = true;
   try {
-    // 1. Check onboarding
-    const status = await $fetch('/api/onboarding/status');
-    if (status.requiresOnboarding) return navigateTo('/onboarding');
+    const res = await $fetch('/api/admin/bi', { params: { month: month.value } });
+    data.value = res;
+  } catch(e) { console.error(e); }
+  finally { loading.value = false; }
+};
 
-    // 2. Dispatch
-    if (user.value?.role_name !== 'SUPER_ADMIN') {
-      // Normal User Redirect or Simple Dashboard
-      const target = status.homePage || '/reembolsos';
-      if (target !== '/') return navigateTo(target);
-      
-      // Fallback simple view
-      const data = await $fetch('/api/kpi');
-      normalKpi.value = data.global;
-      normalCharts.value = data.charts;
-    } else {
-      // SUPER ADMIN BI LOAD
-      // Load planteles filter once
-      if (plantelesList.value.length === 0) {
-         const pRes = await $fetch<any[]>('/api/crud/planteles');
-         plantelesList.value = pRes || [];
-      }
+watch(month, fetchBI);
 
-      const data: any = await $fetch('/api/admin/bi', { params: { 
-        month: filters.value.month,
-        plantel_id: filters.value.plantelId 
-      }});
-      
-      kpi.value = data.kpi || {};
-      timeline.value = data.timeline || [];
-      statusBreakdown.value = data.statusBreakdown || [];
-      plantelStats.value = data.plantelStats || [];
-    }
-  } catch (error) {
-    console.error('Dashboard Error:', error);
-  } finally {
-    loading.value = false;
+onMounted(async () => {
+  // Redirect non-admins
+  if (user.value?.role_name !== 'SUPER_ADMIN') {
+     const status = await $fetch('/api/onboarding/status');
+     const target = status.homePage || '/reembolsos';
+     if (target !== '/') return navigateTo(target);
+     return; // Normal dashboard logic would go here if needed
   }
-};
+  fetchBI();
+});
 
-// Watch filters for live reload
-watch(filters, () => {
-   if (user.value?.role_name === 'SUPER_ADMIN') loadDashboard();
-}, { deep: true });
-
-onMounted(loadDashboard);
-
-// Drill Down Action
-const openDetail = (item: any) => {
-  // We can reuse the specific edit modal logic or a read-only view. 
-  // For quick BI drill-down, let's navigate to the reimbursement page with a query 
-  // OR we can create a dedicated lightweight modal here. 
-  // Let's redirect to standard view filtered by this ID for consistency.
-  navigateTo(`/reembolsos?q=${item.folio}`);
-};
+// Drill down
+const openTicket = (id: number) => window.open(`/reembolsos?q=R-${String(id).padStart(5,'0')}`, '_blank');
 </script>
 
 <template>
-  <div>
-    <!-- Loading -->
-    <div v-if="loading" class="flex flex-col items-center justify-center min-h-[60vh] space-y-4">
-      <div class="animate-spin w-10 h-10 border-4 border-indigo-600 border-t-transparent rounded-full"></div>
-      <p class="text-slate-500 font-medium animate-pulse">Analizando datos...</p>
-    </div>
-
-    <!-- SUPER ADMIN BI DASHBOARD -->
-    <div v-else-if="user?.role_name === 'SUPER_ADMIN'" class="space-y-8 animate-fade-in p-2">
-      
-      <!-- Top Control Bar -->
-      <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm sticky top-0 z-10 backdrop-blur-xl bg-white/90">
-         <div>
-            <h1 class="text-2xl font-black text-slate-900 tracking-tight flex items-center gap-2">
-               <ArrowTrendingUpIcon class="w-7 h-7 text-indigo-600" />
-               Business Intelligence
-            </h1>
-            <p class="text-xs text-slate-500 font-medium uppercase tracking-wider mt-1">
-               Panorama Global Financiero
-            </p>
-         </div>
-         
-         <div class="flex flex-col sm:flex-row gap-3">
-            <div class="relative group">
-               <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <CalendarIcon class="h-5 w-5 text-slate-400 group-focus-within:text-indigo-500 transition-colors" />
-               </div>
-               <input 
-                  type="month" 
-                  v-model="filters.month"
-                  class="pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-500 transition shadow-sm"
-               />
-            </div>
-
-            <div class="relative group">
-               <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <BuildingOfficeIcon class="h-5 w-5 text-slate-400 group-focus-within:text-indigo-500 transition-colors" />
-               </div>
-               <select 
-                  v-model="filters.plantelId"
-                  class="pl-10 pr-8 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-500 transition shadow-sm appearance-none min-w-[200px]"
-               >
-                  <option value="">Vista Global (Todos)</option>
-                  <option v-for="p in plantelesList" :key="p.id" :value="p.id">{{ p.nombre }}</option>
-               </select>
-               <FunnelIcon class="absolute right-3 top-2.5 w-4 h-4 text-slate-400 pointer-events-none" />
-            </div>
-         </div>
-      </div>
-
-      <!-- KPI Grid -->
-      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-         <!-- Total Card -->
-         <div class="bg-slate-900 text-white p-6 rounded-2xl shadow-lg relative overflow-hidden group">
-            <div class="absolute -right-4 -top-4 w-24 h-24 bg-white/10 rounded-full blur-2xl group-hover:bg-white/20 transition-all"></div>
-            <div class="relative z-10">
-               <div class="text-slate-400 text-xs font-bold uppercase mb-1">Total Solicitado</div>
-               <div class="text-3xl font-black tracking-tight">{{ formatMoney(kpi.total_money) }}</div>
-               <div class="mt-4 flex items-center gap-2 text-xs">
-                  <span class="bg-white/20 px-2 py-0.5 rounded-md font-mono">{{ kpi.total_count }} solicitudes</span>
-                  <span class="text-slate-400">en este periodo</span>
-               </div>
-            </div>
-         </div>
-
-         <!-- Pending Card -->
-         <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 group hover:border-amber-300 transition-colors">
-            <div class="flex justify-between items-start mb-2">
-               <div class="p-2 bg-amber-50 text-amber-600 rounded-lg">
-                  <ClockIcon class="w-6 h-6" />
-               </div>
-               <span class="text-xs font-bold text-amber-600 bg-amber-50 px-2 py-1 rounded-full uppercase">En Proceso</span>
-            </div>
-            <div class="text-slate-500 text-xs font-bold uppercase">Monto Pendiente</div>
-            <div class="text-2xl font-black text-slate-800">{{ formatMoney(kpi.pending_money) }}</div>
-            <div class="mt-2 w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
-               <div class="bg-amber-400 h-1.5 rounded-full" :style="{ width: calculatePercent(kpi.pending_money, kpi.total_money) + '%' }"></div>
-            </div>
-         </div>
-
-         <!-- Paid Card -->
-         <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 group hover:border-emerald-300 transition-colors">
-            <div class="flex justify-between items-start mb-2">
-               <div class="p-2 bg-emerald-50 text-emerald-600 rounded-lg">
-                  <CheckCircleIcon class="w-6 h-6" />
-               </div>
-               <span class="text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full uppercase">Completado</span>
-            </div>
-            <div class="text-slate-500 text-xs font-bold uppercase">Monto Pagado</div>
-            <div class="text-2xl font-black text-slate-800">{{ formatMoney(kpi.paid_money) }}</div>
-            <div class="mt-2 text-xs text-slate-400 flex justify-between">
-               <span>Deducible: {{ formatMoney(kpi.deducible_money) }}</span>
-            </div>
-         </div>
-
-         <!-- Performance Card -->
-         <div class="bg-gradient-to-br from-indigo-50 to-white p-6 rounded-2xl shadow-sm border border-indigo-100">
-            <div class="text-indigo-900 text-xs font-bold uppercase mb-1">Tiempo Promedio</div>
-            <div class="text-3xl font-black text-indigo-700">
-               {{ Math.round(Number(kpi.avg_days || 0)) }} <span class="text-lg font-medium text-indigo-400">días</span>
-            </div>
-            <p class="text-xs text-indigo-400 mt-2">
-               Desde creación hasta pago
-            </p>
-         </div>
-      </div>
-
-      <!-- MAIN VIZ: STAGE TIMELINE (GANTT-LIKE) -->
-      <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-         
-         <!-- Left Col: The Detailed Timeline/Matrix -->
-         <div class="lg:col-span-2 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col h-[600px]">
-            <div class="p-5 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
-               <h3 class="font-bold text-slate-800 flex items-center gap-2">
-                  <ChartBarIcon class="w-5 h-5 text-indigo-600" />
-                  Progreso de Solicitudes
-               </h3>
-               <div class="text-xs text-slate-400">Ordenado por fecha más reciente</div>
-            </div>
-            
-            <div class="flex-1 overflow-y-auto p-2 space-y-2 custom-scrollbar">
-               <div v-for="item in timeline" :key="item.id" 
-                    @click="openDetail(item)"
-                    class="group bg-white hover:bg-slate-50 border border-slate-100 rounded-xl p-4 transition-all cursor-pointer hover:shadow-md hover:border-indigo-100"
-               >
-                  <div class="flex justify-between items-center mb-3">
-                     <div class="flex items-center gap-3">
-                        <div class="w-10 h-10 rounded-lg bg-slate-100 flex items-center justify-center font-bold text-xs text-slate-500 group-hover:bg-indigo-600 group-hover:text-white transition-colors">
-                           {{ new Date(item.reimbursement_date).getDate() }}
-                        </div>
-                        <div>
-                           <div class="font-bold text-slate-900 text-sm group-hover:text-indigo-700 transition-colors">{{ item.folio }} - {{ item.solicitante_nombre }}</div>
-                           <div class="text-xs text-slate-400">{{ item.plantel_nombre }}</div>
-                        </div>
-                     </div>
-                     <div class="text-right">
-                        <div class="font-mono font-bold text-slate-800">{{ formatMoney(item.total_amount) }}</div>
-                        <div class="text-[10px] text-slate-400 font-mono">{{ item.status }}</div>
-                     </div>
-                  </div>
-                  
-                  <!-- The Progress Bar (Gantt element) -->
-                  <div class="relative h-2 bg-slate-100 rounded-full overflow-hidden">
-                     <div 
-                        class="absolute top-0 left-0 h-full rounded-full transition-all duration-1000"
-                        :class="getStageInfo(item.status).color"
-                        :style="{ width: getStageInfo(item.status).pct + '%' }"
-                     ></div>
-                  </div>
-                  <div class="flex justify-between mt-1">
-                     <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{{ getStageInfo(item.status).label }}</span>
-                     <span class="text-[10px] text-slate-400">{{ getStageInfo(item.status).pct }}%</span>
-                  </div>
-               </div>
-               
-               <div v-if="timeline.length === 0" class="h-full flex flex-col items-center justify-center text-slate-400">
-                  <DocumentTextIcon class="w-12 h-12 mb-2 opacity-50" />
-                  <p>No hay datos para este periodo.</p>
-               </div>
-            </div>
-         </div>
-
-         <!-- Right Col: Breakdown & Stats -->
-         <div class="space-y-6">
-            
-            <!-- Plantel Leaderboard -->
-            <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
-               <h3 class="font-bold text-slate-800 mb-4 flex items-center gap-2">
-                  <BuildingOfficeIcon class="w-5 h-5 text-indigo-500" />
-                  Gasto por Plantel
-               </h3>
-               <div class="space-y-4">
-                  <div v-for="(p, idx) in plantelStats" :key="idx" class="relative">
-                     <div class="flex justify-between text-xs mb-1 font-medium z-10 relative">
-                        <span class="text-slate-700">{{ p.nombre }}</span>
-                        <span class="text-slate-900 font-bold">{{ formatMoney(p.total) }}</span>
-                     </div>
-                     <div class="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
-                        <div 
-                           class="bg-indigo-500 h-2 rounded-full opacity-80" 
-                           :style="{ width: calculatePercent(p.total, kpi.total_money) + '%' }"
-                        ></div>
-                     </div>
-                  </div>
-                  <div v-if="plantelStats.length === 0" class="text-xs text-slate-400 italic">Selecciona 'Vista Global' para ver comparativa.</div>
-               </div>
-            </div>
-
-            <!-- Status Donut (Simulated with Bars for cleaner look) -->
-            <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
-               <h3 class="font-bold text-slate-800 mb-4 flex items-center gap-2">
-                  <FunnelIcon class="w-5 h-5 text-emerald-500" />
-                  Etapas del Proceso
-               </h3>
-               <div class="space-y-3">
-                  <div v-for="(s, idx) in statusBreakdown" :key="idx" class="flex items-center gap-3">
-                     <div :class="`w-2 h-2 rounded-full ${getStageInfo(s.status).color}`"></div>
-                     <div class="flex-1 text-xs font-medium text-slate-600">{{ getStageInfo(s.status).label }}</div>
-                     <div class="text-xs font-bold text-slate-800">{{ s.c }}</div>
-                  </div>
-               </div>
-            </div>
-
-         </div>
-      </div>
-    </div>
-
-    <!-- NORMAL USER SIMPLE DASHBOARD (FALLBACK) -->
-    <div v-else class="space-y-8 animate-fade-in">
-      <div class="flex items-center justify-between">
+  <div v-if="user?.role_name === 'SUPER_ADMIN'" class="min-h-screen bg-slate-50 pb-20">
+    
+    <!-- HEADER CONTROLS -->
+    <div class="sticky top-0 z-30 bg-white/90 backdrop-blur-md border-b border-slate-200 px-6 py-4 shadow-sm">
+      <div class="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 class="text-3xl font-bold text-slate-900 tracking-tight">Bienvenido, {{ user.nombre }}</h1>
-          <p class="text-slate-500 mt-1">Resumen de actividad.</p>
-        </div>
-        <div class="text-right">
-          <p class="text-sm font-medium text-slate-500">Fecha</p>
-          <p class="text-slate-900 font-bold">{{ new Date().toLocaleDateString('es-MX', { dateStyle: 'long' }) }}</p>
-        </div>
-      </div>
-
-      <!-- Stats Cards (Simple) -->
-      <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
-        <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 transition hover:shadow-md">
-          <div class="flex items-center gap-4">
-            <div class="p-3 bg-blue-50 text-blue-600 rounded-xl">
-              <DocumentTextIcon class="w-6 h-6" />
-            </div>
-            <div>
-              <p class="text-sm font-medium text-slate-500">Total Solicitudes</p>
-              <p class="text-2xl font-bold text-slate-800">{{ normalKpi.total_count || 0 }}</p>
-            </div>
-          </div>
+           <h1 class="text-2xl font-black text-slate-900 flex items-center gap-2">
+              <ArrowTrendingUpIcon class="w-7 h-7 text-indigo-600" />
+              Timeline Operativo
+           </h1>
+           <p class="text-xs text-slate-500 font-bold uppercase tracking-wider">
+              Seguimiento de tiempos y estancamientos por plantel
+           </p>
         </div>
 
-        <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 transition hover:shadow-md">
-          <div class="flex items-center gap-4">
-            <div class="p-3 bg-emerald-50 text-emerald-600 rounded-xl">
-              <BanknotesIcon class="w-6 h-6" />
-            </div>
-            <div>
-              <p class="text-sm font-medium text-slate-500">Pagado / Aprobado</p>
-              <p class="text-2xl font-bold text-emerald-700">{{ formatMoney(normalKpi.total_pagado) }}</p>
-            </div>
-          </div>
-        </div>
+        <div class="flex items-center gap-3">
+           <!-- Legend -->
+           <div class="hidden lg:flex items-center gap-3 text-[10px] font-bold uppercase text-slate-500 mr-4 border-r border-slate-200 pr-4">
+              <div class="flex items-center gap-1"><div class="w-3 h-3 bg-amber-400 rounded-sm"></div> Ops</div>
+              <div class="flex items-center gap-1"><div class="w-3 h-3 bg-blue-400 rounded-sm"></div> Fiscal</div>
+              <div class="flex items-center gap-1"><div class="w-3 h-3 bg-indigo-500 rounded-sm"></div> Pago</div>
+              <div class="flex items-center gap-1"><div class="w-3 h-3 bg-emerald-500 rounded-sm"></div> Listo</div>
+           </div>
 
-        <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 transition hover:shadow-md">
-          <div class="flex items-center gap-4">
-            <div class="p-3 bg-amber-50 text-amber-600 rounded-xl">
-              <ClockIcon class="w-6 h-6" />
-            </div>
-            <div>
-              <p class="text-sm font-medium text-slate-500">En Revisión</p>
-              <p class="text-2xl font-bold text-amber-600">{{ formatMoney(normalKpi.total_pendiente) }}</p>
-            </div>
-          </div>
-        </div>
-
-        <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 transition hover:shadow-md">
-          <div class="flex items-center gap-4">
-            <div class="p-3 bg-red-50 text-red-600 rounded-xl">
-              <XCircleIcon class="w-6 h-6" />
-            </div>
-            <div>
-              <p class="text-sm font-medium text-slate-500">Rechazados</p>
-              <p class="text-2xl font-bold text-red-600">{{ normalKpi.total_rechazados || 0 }}</p>
-            </div>
-          </div>
+           <div class="relative group">
+              <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                 <CalendarIcon class="h-5 w-5 text-slate-400" />
+              </div>
+              <input 
+                 type="month" 
+                 v-model="month"
+                 class="pl-10 pr-4 py-2 bg-slate-100 border-none rounded-xl text-sm font-bold text-slate-700 focus:ring-2 focus:ring-indigo-500 transition cursor-pointer"
+              />
+           </div>
+           
+           <button @click="fetchBI" class="p-2 bg-slate-100 hover:bg-slate-200 rounded-xl text-slate-600 transition">
+              <ArrowPathIcon class="w-5 h-5" :class="loading ? 'animate-spin' : ''" />
+           </button>
         </div>
       </div>
     </div>
 
+    <!-- MAIN MATRIX -->
+    <div class="max-w-7xl mx-auto p-4 md:p-6 overflow-x-auto">
+       
+       <div v-if="loading" class="py-20 text-center">
+          <div class="animate-spin w-10 h-10 border-4 border-indigo-600 border-t-transparent rounded-full mx-auto mb-4"></div>
+          <p class="text-slate-400 font-medium">Calculando tiempos de proceso...</p>
+       </div>
+
+       <div v-else class="min-w-[800px] bg-white rounded-2xl border border-slate-200 shadow-xl overflow-hidden">
+          
+          <!-- MATRIX HEADER (DAYS) -->
+          <div class="flex border-b border-slate-200 bg-slate-50">
+             <div class="w-48 md:w-64 p-4 shrink-0 font-bold text-xs text-slate-400 uppercase tracking-wider border-r border-slate-200">
+                Plantel
+             </div>
+             <div class="flex-1 relative h-10">
+                <!-- Day Markers -->
+                <div v-for="d in data.totalDaysInMonth" :key="d" 
+                     class="absolute top-0 bottom-0 border-l border-slate-100 text-[9px] text-slate-300 pl-0.5 pt-1"
+                     :style="{ left: `${((d-1)/data.totalDaysInMonth)*100}%` }"
+                >
+                   {{ d }}
+                </div>
+             </div>
+          </div>
+
+          <!-- SWIMLANES -->
+          <div class="divide-y divide-slate-100">
+             <div v-for="lane in data.swimlanes" :key="lane.id" class="flex group hover:bg-slate-50/50 transition-colors">
+                
+                <!-- ROW HEADER (Plantel Info) -->
+                <div class="w-48 md:w-64 p-4 shrink-0 border-r border-slate-200 bg-white z-10">
+                   <div class="font-bold text-slate-800 text-sm truncate" :title="lane.name">{{ lane.name }}</div>
+                   <div class="flex items-center gap-2 mt-1">
+                      <span class="text-xs bg-slate-100 px-2 py-0.5 rounded text-slate-500 font-medium">
+                         {{ lane.items.length }} solicitudes
+                      </span>
+                      <!-- Alert if lagging items exist -->
+                      <span v-if="lane.items.some((i:any) => i.lagDays > 5 && i.status !== 'PROCESSED')" class="flex items-center gap-1 text-[10px] font-bold text-rose-600 bg-rose-50 px-2 py-0.5 rounded">
+                         <ExclamationCircleIcon class="w-3 h-3" /> Atraso
+                      </span>
+                   </div>
+                </div>
+
+                <!-- TIMELINE TRACK -->
+                <div class="flex-1 relative py-2">
+                   <!-- Vertical Day Grid Lines (Background) -->
+                   <div class="absolute inset-0 pointer-events-none">
+                      <div v-for="d in data.totalDaysInMonth" :key="d" 
+                           class="absolute top-0 bottom-0 border-l border-slate-50"
+                           :style="{ left: `${((d-1)/data.totalDaysInMonth)*100}%` }"
+                      ></div>
+                   </div>
+
+                   <!-- BARS STACK -->
+                   <div class="relative space-y-1 px-1 min-h-[30px]">
+                      <div v-for="item in lane.items" :key="item.id"
+                           @click="openTicket(item.id)"
+                           class="h-6 rounded-md shadow-sm relative text-[10px] flex items-center px-2 text-white font-bold cursor-pointer hover:brightness-110 hover:scale-[1.01] transition-all group/bar overflow-hidden whitespace-nowrap"
+                           :class="getStageStyle(item.status, item.lagDays).classes"
+                           :style="{ 
+                              marginLeft: `${item.startPct}%`, 
+                              width: `${item.widthPct}%` 
+                           }"
+                           :title="`Folio: ${item.folio}\nEstado: ${item.status}\nDías: ${item.lagDays}\nSolicitante: ${item.solicitante}`"
+                      >
+                         <!-- Label inside bar (if wide enough) -->
+                         <span v-if="item.widthPct > 5" class="drop-shadow-md mr-1 opacity-90">{{ item.folio }}</span>
+                         
+                         <!-- Details on Hover (Tooltip-ish inside) -->
+                         <div v-if="item.widthPct > 15" class="opacity-0 group-hover/bar:opacity-100 transition-opacity ml-auto flex items-center gap-1 bg-black/20 px-1.5 py-0.5 rounded text-[9px]">
+                            <ClockIcon class="w-3 h-3" /> {{ item.lagDays }}d
+                         </div>
+                      </div>
+                   </div>
+                </div>
+             </div>
+
+             <!-- Empty State -->
+             <div v-if="data.swimlanes.length === 0" class="p-10 text-center text-slate-400">
+                No hay actividad registrada en este mes.
+             </div>
+          </div>
+       </div>
+
+       <!-- LEGEND FOOTER -->
+       <div class="mt-6 flex flex-wrap gap-4 justify-center text-xs text-slate-500">
+          <div class="flex items-center gap-2">
+             <div class="w-4 h-4 bg-amber-400 rounded border border-amber-500"></div>
+             <span>Revisión Operativa</span>
+          </div>
+          <div class="flex items-center gap-2">
+             <div class="w-4 h-4 bg-blue-400 rounded border border-blue-500"></div>
+             <span>Revisión Fiscal</span>
+          </div>
+          <div class="flex items-center gap-2">
+             <div class="w-4 h-4 bg-indigo-500 rounded border border-indigo-600"></div>
+             <span>Aprobado (Por Pagar)</span>
+          </div>
+          <div class="flex items-center gap-2">
+             <div class="w-4 h-4 bg-emerald-500 rounded border border-emerald-600"></div>
+             <span>Pagado (Finalizado)</span>
+          </div>
+          <div class="flex items-center gap-2 ml-4">
+             <ExclamationCircleIcon class="w-4 h-4 text-rose-600" />
+             <span class="font-bold text-rose-600">Alerta de Atraso (>5 días sin avance)</span>
+          </div>
+       </div>
+    </div>
   </div>
+
+  <!-- Normal User View Fallback (If logic fails, just empty div as redirection handles it) -->
+  <div v-else></div>
 </template>
 
 <style scoped>
-.animate-fade-in {
-  animation: fadeIn 0.5s ease-out forwards;
+/* Ensure horizontal scroll works smoothly */
+.overflow-x-auto {
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
 }
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
+.overflow-x-auto::-webkit-scrollbar {
+  height: 8px;
 }
-
-/* Custom Scrollbar for the Gantt List */
-.custom-scrollbar::-webkit-scrollbar {
-  width: 6px;
-}
-.custom-scrollbar::-webkit-scrollbar-track {
-  background: #f1f5f9; 
-}
-.custom-scrollbar::-webkit-scrollbar-thumb {
-  background: #cbd5e1; 
-  border-radius: 10px;
-}
-.custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8; 
+.overflow-x-auto::-webkit-scrollbar-thumb {
+  background-color: #cbd5e1;
+  border-radius: 4px;
 }
 </style>

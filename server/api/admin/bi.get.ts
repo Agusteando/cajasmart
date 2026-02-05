@@ -5,83 +5,103 @@ export default defineEventHandler(async (event) => {
   requireSuperAdminReal(event);
   const q = getQuery(event);
   
-  const monthStr = String(q.month || new Date().toISOString().slice(0, 7)); // YYYY-MM
-  const plantelId = q.plantel_id ? Number(q.plantel_id) : null;
+  // Default to current month
+  const now = new Date();
+  const monthStr = String(q.month || now.toISOString().slice(0, 7)); // YYYY-MM
+  
+  // Calculate Month Boundaries for Timeline Math
+  const [year, month] = monthStr.split('-').map(Number);
+  const startDate = new Date(year, month - 1, 1);
+  const endDate = new Date(year, month, 0); // Last day of month
+  const totalDaysInMonth = endDate.getDate();
 
   const db = await useDb();
 
-  // Base conditions
-  const conditions = ["DATE_FORMAT(r.reimbursement_date, '%Y-%m') = ?"];
-  const params: any[] = [monthStr];
-
-  if (plantelId) {
-    conditions.push("r.plantel_id = ?");
-    params.push(plantelId);
-  }
-
-  const whereSql = conditions.join(' AND ');
-
-  // 1. KPI Aggregates
-  const [kpiRows]: any = await db.execute(`
+  // Fetch ALL items that overlap with this month
+  // Logic: Created before end of month AND (Processed after start of month OR Not processed yet)
+  const [rows]: any = await db.execute(`
     SELECT 
-      COUNT(*) as total_count,
-      SUM(total_amount) as total_money,
-      AVG(DATEDIFF(IFNULL(r.processed_at, NOW()), r.created_at)) as avg_days,
-      SUM(CASE WHEN r.status = 'PROCESSED' THEN total_amount ELSE 0 END) as paid_money,
-      SUM(CASE WHEN r.status IN ('PENDING_OPS_REVIEW', 'PENDING_FISCAL_REVIEW') THEN total_amount ELSE 0 END) as pending_money,
-      SUM(CASE WHEN r.is_deducible = 1 THEN total_amount ELSE 0 END) as deducible_money,
-      SUM(CASE WHEN r.is_deducible = 0 THEN total_amount ELSE 0 END) as no_deducible_money
-    FROM reimbursements r
-    WHERE ${whereSql}
-  `, params);
-
-  // 2. Timeline / Gantt Data
-  // FIX: Removed 'r.folio' from SQL as it doesn't exist. We generate it below.
-  const [timelineRows]: any = await db.execute(`
-    SELECT 
-      r.id, r.status, r.total_amount, r.created_at, r.processed_at, r.updated_at, r.reimbursement_date,
-      p.nombre as plantel_nombre,
+      r.id, r.status, r.total_amount, r.created_at, r.processed_at, r.reimbursement_date,
+      r.is_deducible,
+      p.id as plantel_id, p.nombre as plantel_nombre, p.codigo as plantel_codigo,
       u.nombre as solicitante_nombre
     FROM reimbursements r
     LEFT JOIN planteles p ON r.plantel_id = p.id
     JOIN users u ON r.user_id = u.id
-    WHERE ${whereSql}
-    ORDER BY r.reimbursement_date DESC
-  `, params);
+    WHERE 
+      r.created_at <= ? 
+      AND (r.processed_at >= ? OR r.processed_at IS NULL)
+    ORDER BY p.nombre ASC, r.created_at ASC
+  `, [
+    new Date(year, month, 1).toISOString(), // End of target month (approx, purely distinct overlap logic usually handled in JS for precision)
+    startDate.toISOString()
+  ]);
+  // Note: SQL overlap logic can be tricky, fetching a bit wider range is safer, filtering in JS below.
 
-  // Generate dynamic Folio
-  const timeline = timelineRows.map((r: any) => ({
-    ...r,
-    folio: `R-${String(r.id).padStart(5, '0')}`
-  }));
+  // Group by Plantel
+  const matrix: Record<string, any> = {};
 
-  // 3. Status Breakdown (Funnel)
-  const [statusRows]: any = await db.execute(`
-    SELECT status, COUNT(*) as c, SUM(total_amount) as m
-    FROM reimbursements r
-    WHERE ${whereSql}
-    GROUP BY status
-  `, params);
+  for (const r of rows) {
+    const pId = r.plantel_id || 0;
+    const pName = r.plantel_nombre || 'Sin Plantel';
 
-  // 4. Plantel Comparison (if global view)
-  let plantelStats: any[] = [];
-  if (!plantelId) {
-    const [pRows]: any = await db.execute(`
-      SELECT p.nombre, SUM(r.total_amount) as total, COUNT(*) as count
-      FROM reimbursements r
-      JOIN planteles p ON r.plantel_id = p.id
-      WHERE ${whereSql}
-      GROUP BY p.id, p.nombre
-      ORDER BY total DESC
-      LIMIT 10
-    `, params);
-    plantelStats = pRows;
+    if (!matrix[pId]) {
+      matrix[pId] = {
+        id: pId,
+        name: pName,
+        items: []
+      };
+    }
+
+    // --- Timeline Math ---
+    const created = new Date(r.created_at);
+    
+    // Determine "End" point for the bar
+    let end = r.processed_at ? new Date(r.processed_at) : new Date(); // If pending, it "ends" today (continues lagging)
+    
+    // Clamp to view window (The selected month)
+    // If it started before this month, visually it starts at day 1 (0%)
+    // If it ends after this month, visually it ends at day 30 (100%)
+    
+    const viewStart = startDate.getTime();
+    const viewEnd = endDate.getTime();
+    const itemStart = created.getTime();
+    const itemEnd = end.getTime();
+
+    // Skip if completely out of range (double check)
+    if (itemEnd < viewStart || itemStart > viewEnd) continue;
+
+    // Calculate visual percentages (0 to 100)
+    const startPct = Math.max(0, ((itemStart - viewStart) / (viewEnd - viewStart)) * 100);
+    let endPct = Math.min(100, ((itemEnd - viewStart) / (viewEnd - viewStart)) * 100);
+    
+    // Ensure minimum visibility width (1%)
+    if (endPct - startPct < 1) endPct = startPct + 1;
+
+    // Calculate Lag Days (Real duration)
+    const diffTime = Math.abs(itemEnd - itemStart);
+    const lagDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
+
+    matrix[pId].items.push({
+      id: r.id,
+      folio: `R-${String(r.id).padStart(5, '0')}`,
+      status: r.status,
+      amount: r.total_amount,
+      solicitante: r.solicitante_nombre,
+      is_deducible: !!r.is_deducible,
+      startPct,
+      widthPct: endPct - startPct,
+      lagDays,
+      dateStr: created.toLocaleDateString('es-MX', { day: 'numeric', month: 'short' })
+    });
   }
 
+  // Convert map to array
+  const swimlanes = Object.values(matrix);
+
   return {
-    kpi: kpiRows[0],
-    timeline: timeline, // Return the processed array
-    statusBreakdown: statusRows,
-    plantelStats
+    monthStr,
+    totalDaysInMonth,
+    swimlanes
   };
 });
