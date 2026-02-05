@@ -9,7 +9,15 @@
       <div v-for="item in items" :key="item.id" class="bg-white p-6 rounded-xl border shadow-sm">
          <div class="flex justify-between items-start">
             <div>
-               <h3 class="font-bold text-lg">{{ item.folio }} <span class="text-slate-400">|</span> {{ item.plantel }}</h3>
+               <h3 class="font-bold text-lg flex items-center gap-2">
+                  {{ item.folio }} 
+                  <span class="text-slate-400">|</span> 
+                  {{ item.plantel }}
+                  <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase" 
+                        :class="item.is_deducible ? 'bg-emerald-50 text-emerald-700' : 'bg-orange-50 text-orange-700'">
+                     {{ item.is_deducible ? 'Deducible' : 'No Deducible' }}
+                  </span>
+               </h3>
                <p class="text-sm text-slate-500">Solicitante: {{ item.solicitante }} &bull; {{ fmtDate(item.fechaISO) }}</p>
                <div v-if="item.notas" class="text-xs text-amber-700 mt-1 bg-amber-50 p-2 rounded">Nota: {{ item.notas }}</div>
             </div>
@@ -56,7 +64,6 @@ const fmtDate = (d: string) => d ? new Date(d).toLocaleDateString('es-MX') : '-'
 
 async function fetchItems() {
   loading.value = true
-  // CORRECTED: Point to unified endpoint
   const res = await $fetch<any>('/api/reimbursements', { params: { estado: 'en_revision' } })
   items.value = res.items
   loading.value = false

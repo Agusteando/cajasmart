@@ -104,6 +104,7 @@ export default defineEventHandler(async (event) => {
     const rItems = itemsMap[r.id] || [];
     const total = Number(r.total_amount);
     const razonSocial = r.razon_social || 'INSTITUTO EDUCATIVO PARA EL DESARROLLO INTEGRAL DEL SABER SC';
+    const isDeducible = !!r.is_deducible;
 
     // --- A. Draw Summary Sheet ---
     const page = pdfDoc.addPage();
@@ -128,10 +129,23 @@ export default defineEventHandler(async (event) => {
     const rsWidth = fontBold.widthOfTextAtSize(razonSocial, rsSize);
     page.drawText(razonSocial, { x: centerX - (rsWidth / 2), y: y + 10, size: rsSize, font: fontBold });
 
-    const title = 'REEMBOLSO DE CAJA DEDUCIBLE';
+    const title = 'REEMBOLSO DE CAJA';
     const titleWidth = fontBold.widthOfTextAtSize(title, 12);
     page.drawText(title, { x: centerX - (titleWidth / 2), y: y - 15, size: 12, font: fontBold, color: rgb(0, 0, 0) });
     
+    // NEW: Render NO DEDUCIBLE warning if applicable
+    if (!isDeducible) {
+      const warn = 'NO DEDUCIBLE';
+      const warnWidth = fontBold.widthOfTextAtSize(warn, 14);
+      page.drawText(warn, { 
+        x: centerX - (warnWidth / 2), 
+        y: y - 35, 
+        size: 14, 
+        font: fontBold, 
+        color: rgb(1, 0, 0) // Red
+      });
+    }
+
     y -= 50;
 
     // Header Fields

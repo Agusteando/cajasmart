@@ -30,7 +30,7 @@ export default defineEventHandler(async (event) => {
   let sql = `
     SELECT 
       r.id, r.status, r.reimbursement_date, r.total_amount, r.rejection_reason, 
-      r.created_at, r.archived_at,
+      r.created_at, r.archived_at, r.is_deducible,
       u.nombre as solicitante_nombre,
       p.nombre as plantel_nombre
     FROM reimbursements r
@@ -75,11 +75,8 @@ export default defineEventHandler(async (event) => {
     conditions.push('r.archived_at IS NULL');
   }
 
-  // 6. Text Search (Applied to main row first for efficiency, then filtered deeper if needed)
+  // 6. Text Search
   if (search) {
-    // We search basic fields here. Detailed item search happens below or via join if performance needed.
-    // For now, let's keep the logic consistent: we fetch candidates, then filter by items if needed.
-    // To make SQL search efficient for the main table:
     conditions.push(`(
       r.id LIKE ? OR 
       u.nombre LIKE ? OR 
@@ -91,8 +88,6 @@ export default defineEventHandler(async (event) => {
 
   if (conditions.length) sql += ' WHERE ' + conditions.join(' AND ');
   
-  // Sort: Pending items usually oldest first? Or newest? 
-  // Let's go newest first generally.
   sql += ' ORDER BY r.reimbursement_date DESC, r.created_at DESC LIMIT 300';
 
   const [rows]: any = await db.execute(sql, params);
@@ -114,37 +109,7 @@ export default defineEventHandler(async (event) => {
   const results = rows.map((r: any) => {
     const myItems = itemsMap[r.id] || [];
     
-    // Deep Search: If search term provided, double check if it matches items (provider, concept, invoice)
-    // The SQL WHERE clause handled the main table. If the user searched for "Office Depot" (provider),
-    // the SQL above wouldn't catch it unless we JOIN. 
-    // Optimization: If search is active, and the main row didn't match (logic above was OR), 
-    // strictly speaking the SQL above requires ID/User/Plantel match. 
-    // To allow searching by Provider, we must modify the logic or filtering here.
-    //
-    // *Correction for Search*: To keep it simple and performant without complex dynamic JOINS in the main query:
-    // If we want to search items, we usually need to JOIN. 
-    // However, the existing code did client-side-ish filtering after fetching 200 rows. 
-    // Let's stick to the previous logic: fetch candidates based on filters, then filter arrays.
-    // BUT the SQL above *restricts* by search. This breaks searching for providers.
-    //
-    // Let's relax the SQL search if it was strictly ID/User/Plantel.
-    // Actually, let's rely on the client knowing the ID or filtering returned rows if the dataset is small (LIMIT 300).
-    // But for a proper search, let's assume the previous code's "haystack" approach was post-fetch.
-    // Since I added the SQL WHERE for search, I might miss providers. 
-    // Let's REMOVE the SQL search condition above and do it in memory for the LIMIT 300 set, 
-    // OR add a JOIN. Given "Golden Rule", I will revert to the in-memory filter 
-    // to match the original behavior BUT keep the new filters (month/archived) in SQL which are 1:1 with the table.
-    
-    // ... Actually, the previous code had:
-    /*
-      if (search) {
-        const haystack = ...
-        if (!haystack.includes(search)) return null;
-      }
-    */
-    // The SQL I added in point 6 overrides this. I will remove point 6 logic from SQL 
-    // and let the post-processing handle it to ensure Provider search works.
-    
+    // In-memory search for items details (provider, concept)
     if (search) {
       const haystack = [
         r.id, 
@@ -164,6 +129,7 @@ export default defineEventHandler(async (event) => {
       fechaISO: r.reimbursement_date || r.created_at,
       estado: mapStatus(r.status),
       total: Number(r.total_amount),
+      is_deducible: !!r.is_deducible,
       notas: r.rejection_reason || null,
       archived_at: r.archived_at,
       file_url: myItems[0]?.file_url || null,

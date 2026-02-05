@@ -15,7 +15,13 @@
           <div class="flex-1 p-6">
             <div class="flex justify-between mb-4">
               <div>
-                <h3 class="font-bold text-lg">Folio: {{ item.folio }}</h3>
+                <h3 class="font-bold text-lg flex items-center gap-2">
+                   Folio: {{ item.folio }}
+                   <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase" 
+                         :class="item.is_deducible ? 'bg-emerald-50 text-emerald-700' : 'bg-orange-50 text-orange-700'">
+                      {{ item.is_deducible ? 'Deducible' : 'No Deducible' }}
+                   </span>
+                </h3>
                 <p class="text-sm text-slate-500">{{ item.plantel }} | {{ item.solicitante }}</p>
               </div>
               <div class="text-right">
@@ -64,7 +70,6 @@ const formatAmount = (n:any) => parseFloat(n).toLocaleString('es-MX', {minimumFr
 const fetchItems = async () => {
   loading.value = true
   try {
-    // CORRECTED: Point to reimbursements
     const res = await $fetch<any>('/api/reimbursements', { params: { status: 'PENDING_OPS_REVIEW' } })
     items.value = res.items || []
   } finally { loading.value = false }

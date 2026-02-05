@@ -14,6 +14,7 @@
              <th class="p-4 w-10"></th>
              <th class="p-4 text-left">Folio</th>
              <th class="p-4 text-left">Admin</th>
+             <th class="p-4 text-left">Tipo</th>
              <th class="p-4 text-left">Total</th>
              <th class="p-4">Accion</th>
           </tr>
@@ -23,6 +24,12 @@
              <td class="p-4"><input type="checkbox" :checked="selectedIds.includes(i.id)" @change="toggleItem(i.id)"></td>
              <td class="p-4">{{ i.folio }} - {{ i.plantel }}</td>
              <td class="p-4">{{ i.solicitante }}</td>
+             <td class="p-4">
+               <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase" 
+                     :class="i.is_deducible ? 'bg-emerald-50 text-emerald-700' : 'bg-orange-50 text-orange-700'">
+                  {{ i.is_deducible ? 'Deducible' : 'No Deduc.' }}
+               </span>
+             </td>
              <td class="p-4 font-bold">${{ i.total }}</td>
              <td class="p-4"><button @click="processSingle(i)" class="text-green-600 font-bold">Pagar</button></td>
           </tr>
@@ -69,7 +76,6 @@ async function fetchItems() {
 }
 
 async function batchPrint() {
-  // Use batch endpoint to get print data
   const res: any = await $fetch('/api/reimbursements/batch', { method: 'POST', body: { action: 'print', ids: selectedIds.value } })
   printData.value = res.data
   setTimeout(() => window.print(), 500)

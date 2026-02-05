@@ -48,14 +48,15 @@
             <tr>
               <th class="px-6 py-4">Folio / Fecha</th>
               <th class="px-6 py-4">Total</th>
+              <th class="px-6 py-4">Tipo</th>
               <th class="px-6 py-4">Estatus</th>
               <th class="px-6 py-4 text-center">Evidencia</th>
               <th class="px-6 py-4 text-right">Acciones</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-slate-100">
-             <tr v-if="loading"><td colspan="5" class="p-8 text-center text-slate-400 italic">Cargando información...</td></tr>
-             <tr v-else-if="items.length === 0"><td colspan="5" class="p-12 text-center text-slate-400">No hay reembolsos registrados.</td></tr>
+             <tr v-if="loading"><td colspan="6" class="p-8 text-center text-slate-400 italic">Cargando información...</td></tr>
+             <tr v-else-if="items.length === 0"><td colspan="6" class="p-12 text-center text-slate-400">No hay reembolsos registrados.</td></tr>
              
              <tr v-for="it in items" :key="it.id" class="hover:bg-slate-50/80 transition-colors group">
                 <td class="px-6 py-4">
@@ -64,6 +65,12 @@
                 </td>
                 <td class="px-6 py-4">
                    <span class="font-mono font-bold text-slate-700 text-base">{{ fmtMoney(it.total) }}</span>
+                </td>
+                <td class="px-6 py-4">
+                   <span class="px-2 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider" 
+                         :class="it.is_deducible ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-orange-50 text-orange-700 border border-orange-100'">
+                      {{ it.is_deducible ? 'Deducible' : 'No Deducible' }}
+                   </span>
                 </td>
                 <td class="px-6 py-4">
                    <span class="px-3 py-1 rounded-full text-xs font-bold inline-flex items-center gap-1.5" :class="estadoBadgeClass(it.estado)">
@@ -133,15 +140,49 @@
           <div class="flex-1 overflow-y-auto p-8 bg-slate-50">
              <div class="max-w-4xl mx-auto space-y-8">
                 
-                <!-- Scanner Section -->
-                <section>
+                <!-- STEP 1: Type Selection -->
+                <section class="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+                   <h3 class="font-bold text-slate-800 mb-4">1. Tipo de Comprobante</h3>
+                   <div class="grid grid-cols-2 gap-4">
+                      <button type="button" 
+                         @click="form.is_deducible = true"
+                         class="p-4 rounded-xl border-2 transition-all text-left group relative overflow-hidden"
+                         :class="form.is_deducible ? 'border-indigo-600 bg-indigo-50/50' : 'border-slate-200 hover:border-indigo-300'"
+                      >
+                         <div class="relative z-10">
+                            <div class="font-bold text-lg mb-1" :class="form.is_deducible ? 'text-indigo-700' : 'text-slate-700'">Fiscal (Deducible)</div>
+                            <div class="text-sm text-slate-500">Factura con XML/CFDI. Se escaneará el código QR.</div>
+                         </div>
+                         <CheckCircleIcon v-if="form.is_deducible" class="absolute top-4 right-4 w-6 h-6 text-indigo-600" />
+                      </button>
+
+                      <button type="button" 
+                         @click="form.is_deducible = false"
+                         class="p-4 rounded-xl border-2 transition-all text-left group relative overflow-hidden"
+                         :class="!form.is_deducible ? 'border-orange-500 bg-orange-50/50' : 'border-slate-200 hover:border-orange-300'"
+                      >
+                         <div class="relative z-10">
+                            <div class="font-bold text-lg mb-1" :class="!form.is_deducible ? 'text-orange-700' : 'text-slate-700'">No Deducible</div>
+                            <div class="text-sm text-slate-500">Recibo simple, vale o nota de remisión sin QR fiscal.</div>
+                         </div>
+                         <CheckCircleIcon v-if="!form.is_deducible" class="absolute top-4 right-4 w-6 h-6 text-orange-500" />
+                      </button>
+                   </div>
+                </section>
+
+                <!-- Scanner Section (Only visible if Deducible) -->
+                <section v-if="form.is_deducible" class="animate-fade-in">
                    <div class="flex items-center gap-2 mb-4">
                       <QrCodeIcon class="w-5 h-5 text-indigo-600" />
-                      <h3 class="font-bold text-slate-800">Agregar Conceptos</h3>
+                      <h3 class="font-bold text-slate-800">Escanear Factura</h3>
                    </div>
                    <!-- This component handles the magic -->
                    <CfdiQrScanner @prefill="onCfdiDetected" />
                 </section>
+
+                <div v-else class="p-4 bg-orange-50 border border-orange-200 rounded-xl text-orange-800 text-sm animate-fade-in">
+                   <strong>Modo No Deducible:</strong> Ingresa los conceptos manualmente y adjunta una foto o PDF del recibo.
+                </div>
 
                 <!-- Concepts List -->
                 <section>
@@ -162,15 +203,15 @@
                          <div class="grid grid-cols-1 md:grid-cols-12 gap-4">
                             <!-- Row 1 -->
                             <div class="md:col-span-3">
-                               <label class="block text-xs font-bold text-slate-400 uppercase mb-1">Fecha Factura</label>
+                               <label class="block text-xs font-bold text-slate-400 uppercase mb-1">Fecha</label>
                                <input v-model="c.invoice_date" type="date" class="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:bg-white focus:ring-2 focus:ring-indigo-500 outline-none transition" />
                             </div>
                             <div class="md:col-span-3">
-                               <label class="block text-xs font-bold text-slate-400 uppercase mb-1">Folio Factura</label>
+                               <label class="block text-xs font-bold text-slate-400 uppercase mb-1">Folio / Ref</label>
                                <input v-model="c.invoice_number" placeholder="Ej: A-1502" class="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:bg-white focus:ring-2 focus:ring-indigo-500 outline-none transition" />
                             </div>
                             <div class="md:col-span-6 pr-8">
-                               <label class="block text-xs font-bold text-slate-400 uppercase mb-1">Proveedor</label>
+                               <label class="block text-xs font-bold text-slate-400 uppercase mb-1">Proveedor / Emisor</label>
                                <input v-model="c.provider" placeholder="Razón Social" class="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:bg-white focus:ring-2 focus:ring-indigo-500 outline-none transition" />
                             </div>
                             
@@ -204,7 +245,7 @@
                       </div>
                       <div class="flex-1">
                          <h3 class="font-bold text-slate-800">Evidencia Digital</h3>
-                         <p class="text-sm text-slate-500 mb-3">Sube el PDF o Foto que contenga las facturas de estos conceptos.</p>
+                         <p class="text-sm text-slate-500 mb-3">Sube el PDF o Foto del comprobante.</p>
                          <input type="file" @change="handleFile" class="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 transition"/>
                          <div v-if="editingId" class="mt-2 text-xs text-amber-600">
                             Nota: Si subes un archivo nuevo, reemplazará al anterior.
@@ -241,7 +282,8 @@
 <script setup lang="ts">
 import { 
    PlusIcon, MagnifyingGlassIcon, DocumentIcon, PencilIcon, TrashIcon, 
-   XMarkIcon, UserIcon, BuildingOfficeIcon, QrCodeIcon, PaperClipIcon 
+   XMarkIcon, UserIcon, BuildingOfficeIcon, QrCodeIcon, PaperClipIcon,
+   CheckCircleIcon 
 } from '@heroicons/vue/24/outline';
 import { useUserCookie } from '~/composables/useUserCookie';
 
@@ -263,6 +305,7 @@ const selectedFile = ref<File | null>(null);
 const form = ref({
    plantel_id: null as number | null, 
    fechaISO: new Date().toISOString().slice(0, 10),
+   is_deducible: true,
    conceptos: [] as any[]
 });
 
@@ -308,15 +351,12 @@ async function refresh() {
 
 // 2. Setup Context (Plantels)
 async function loadContext() {
-   // If super admin or no plantel assigned, fetch list
    if(user.value?.role_name === 'SUPER_ADMIN' || !user.value?.plantel_id) {
       try {
-         // Assuming a simple list endpoint exists or using the generic crud
          const all = await $fetch<any[]>('/api/crud/planteles'); 
          availablePlanteles.value = all.filter(p => p.activo);
       } catch {}
    } else {
-      // Just push current user's plantel
       availablePlanteles.value = [{ id: user.value?.plantel_id, nombre: user.value?.plantel_nombre }];
    }
 }
@@ -328,6 +368,7 @@ function openCreate() {
    form.value = {
       plantel_id: user.value?.plantel_id || (availablePlanteles.value[0]?.id || null),
       fechaISO: new Date().toISOString().slice(0, 10),
+      is_deducible: true, // Default
       conceptos: [{ invoice_date: new Date().toISOString().slice(0,10), invoice_number: '', amount: '' }]
    };
    showModal.value = true;
@@ -336,14 +377,10 @@ function openCreate() {
 function openEdit(it: any) {
    editingId.value = it.id;
    selectedFile.value = null;
-   // Find the plantel ID based on name if possible, or keep it (API should return ID ideally)
-   // For now assuming the list view returns plantel name.
-   // We might need to fetch the single item details to get the ID properly, 
-   // but let's assume `user.plantel_id` is sufficient for ADMIN_PLANTEL context.
-   
    form.value = {
-      plantel_id: user.value?.plantel_id, // Default to user's
+      plantel_id: user.value?.plantel_id,
       fechaISO: it.fechaISO.slice(0,10),
+      is_deducible: !!it.is_deducible,
       conceptos: it.conceptos.map((c: any) => ({ ...c }))
    };
    showModal.value = true;
@@ -368,9 +405,11 @@ function handleFile(e: any) {
    selectedFile.value = e.target.files[0];
 }
 
-// 5. CFDI Handler (The "Magic")
+// 5. CFDI Handler
 function onCfdiDetected(data: any) {
-   // Find the first empty row or create new
+   // Ensure deducible mode is ON just in case
+   form.value.is_deducible = true;
+
    let targetRow = form.value.conceptos.find((c:any) => !c.amount && !c.provider);
    
    if (!targetRow) {
@@ -378,13 +417,10 @@ function onCfdiDetected(data: any) {
       targetRow = form.value.conceptos[form.value.conceptos.length - 1];
    }
 
-   // Auto-fill
    if (data.amount) targetRow.amount = data.amount;
    if (data.provider) targetRow.provider = data.provider;
    if (data.invoiceNumber) targetRow.invoice_number = data.invoiceNumber;
    if (data.date) targetRow.invoice_date = data.date.slice(0, 10);
-   
-   // Optional: Flash UI or Sound to indicate success
 }
 
 // 6. Save
@@ -394,10 +430,9 @@ async function save() {
    saving.value = true;
    
    const fd = new FormData();
-   // User name is inferred from session on server, no need to send
-   // Plantel:
    if (form.value.plantel_id) fd.append('plantel_id', String(form.value.plantel_id));
    fd.append('fechaISO', form.value.fechaISO);
+   fd.append('is_deducible', String(form.value.is_deducible));
    fd.append('conceptos', JSON.stringify(form.value.conceptos));
    if (selectedFile.value) fd.append('file', selectedFile.value);
    if (editingId.value) fd.append('id', editingId.value);
@@ -433,8 +468,15 @@ onMounted(async () => {
 .animate-fade-in-up {
   animation: fadeInUp 0.3s ease-out forwards;
 }
+.animate-fade-in {
+   animation: fadeIn 0.3s ease-out;
+}
 @keyframes fadeInUp {
   from { opacity: 0; transform: translateY(20px) scale(0.98); }
   to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes fadeIn {
+   from { opacity: 0; }
+   to { opacity: 1; }
 }
 </style>

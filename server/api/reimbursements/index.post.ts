@@ -12,14 +12,11 @@ function bad(message: string, statusCode = 400) {
 
 async function saveUpload(file: { filename?: string; data: Buffer }) {
   const cfg = useRuntimeConfig();
-  // Ensure absolute path resolution
   const uploadsDir = path.resolve(process.cwd(), String(cfg.uploadDir || './public/uploads'));
   
-  // Ensure directory exists
   await fs.mkdir(uploadsDir, { recursive: true });
 
   const original = String(file.filename || 'archivo').trim() || 'archivo';
-  // Fix: Limit filename length and characters for DB safety
   const safe = original.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 100);
   const filename = `${Date.now()}_${Math.random().toString(16).slice(2)}_${safe}`;
   
@@ -40,7 +37,6 @@ export default defineEventHandler(async (event) => {
   for (const p of parts) {
     if (!p.name) continue;
     if (p.name === 'file') {
-      // Check if it actually has data
       if (p.data && p.data.length > 0) {
         filePart = p;
       }
@@ -63,7 +59,6 @@ export default defineEventHandler(async (event) => {
     try { body.conceptos = JSON.parse(body.conceptos); } catch { bad('JSON inválido'); }
   }
 
-  // FIX: Resolve Plantel ID
   let plantelId = user.plantel_id; 
   if (!plantelId && body.plantel_id) {
     const parsed = Number(body.plantel_id);
@@ -75,6 +70,10 @@ export default defineEventHandler(async (event) => {
   if (!plantelId) {
     bad('Es necesario seleccionar un Plantel.');
   }
+
+  // Handle boolean check for is_deducible
+  // Multipart data sends "true" or "false" strings, or "1"/"0"
+  const isDeducible = body.is_deducible === 'true' || body.is_deducible === '1' || body.is_deducible === true;
 
   const conceptos = Array.isArray(body.conceptos) ? body.conceptos : [];
   if (!conceptos.length) bad('Faltan conceptos.');
@@ -94,8 +93,8 @@ export default defineEventHandler(async (event) => {
   try {
     const status = 'PENDING_OPS_REVIEW';
     const [res]: any = await connection.execute(
-      `INSERT INTO reimbursements (user_id, plantel_id, status, reimbursement_date, total_amount, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NOW(), NOW())`,
-      [user.id, plantelId, status, fechaISO, totalAmount]
+      `INSERT INTO reimbursements (user_id, plantel_id, status, reimbursement_date, total_amount, is_deducible, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+      [user.id, plantelId, status, fechaISO, totalAmount, isDeducible ? 1 : 0]
     );
     const reimbursementId = res.insertId;
 
@@ -112,12 +111,11 @@ export default defineEventHandler(async (event) => {
     try {
       await createAuditLog({ entityType: 'reimbursement', entityId: reimbursementId, action: 'CREATE', toStatus: status, actorUserId: user.id });
       
-      // FIX: Pass actorUserId to prevent self-notifications
       await notifyRoleUsers(
         'REVISOR_OPS', 
         'NEW_PENDING', 
         'Nueva Solicitud', 
-        `${user.nombre} envió solicitud por $${totalAmount.toFixed(2)}`, 
+        `${user.nombre} envió solicitud por $${totalAmount.toFixed(2)} (${isDeducible ? 'Fiscal' : 'No Deducible'})`, 
         'reimbursement', 
         reimbursementId,
         { url: '/ops', actorUserId: user.id }

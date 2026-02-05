@@ -12,7 +12,6 @@ async function saveUpload(file: { filename?: string; data: Buffer }) {
   await fs.mkdir(uploadsDir, { recursive: true });
   
   const original = String(file.filename || 'f').trim();
-  // Fix: Safe filename
   const safe = original.replace(/[^a-z0-9.]/gi, '_').slice(0, 100);
   const filename = `${Date.now()}_${Math.random().toString(16).slice(2)}_${safe}`;
   
@@ -39,6 +38,9 @@ export default defineEventHandler(async (event) => {
 
   const id = body.id;
   if(!id) throw createError({statusCode:400, statusMessage:'Falta ID'});
+
+  // Parse is_deducible
+  const isDeducible = body.is_deducible === 'true' || body.is_deducible === '1' || body.is_deducible === true;
 
   let fileUrl: string | null = null;
   if (filePart) {
@@ -67,13 +69,14 @@ export default defineEventHandler(async (event) => {
   await connection.beginTransaction();
 
   try {
-    // Note: We generally don't update plantel_id on edit to avoid moving items between budgets accidentally
     await connection.execute(
-      `UPDATE reimbursements SET total_amount = ?, reimbursement_date = ?, status = 'PENDING_OPS_REVIEW', rejection_reason = NULL, returned_by = NULL, updated_at = NOW() WHERE id = ?`,
-      [totalAmount, fechaISO, id]
+      `UPDATE reimbursements 
+       SET total_amount = ?, reimbursement_date = ?, is_deducible = ?, status = 'PENDING_OPS_REVIEW', rejection_reason = NULL, returned_by = NULL, updated_at = NOW() 
+       WHERE id = ?`,
+      [totalAmount, fechaISO, isDeducible ? 1 : 0, id]
     );
 
-    // Replace items logic (simplified for this app structure)
+    // Replace items logic
     await connection.execute('DELETE FROM reimbursement_items WHERE reimbursement_id = ?', [id]);
 
     for (const c of conceptos) {

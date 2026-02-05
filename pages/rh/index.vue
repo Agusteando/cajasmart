@@ -87,6 +87,7 @@
                 <th class="px-6 py-4 text-xs font-bold text-slate-500 uppercase">Folio / Fecha</th>
                 <th class="px-6 py-4 text-xs font-bold text-slate-500 uppercase">Plantel / Solicitante</th>
                 <th class="px-6 py-4 text-xs font-bold text-slate-500 uppercase">Estado</th>
+                <th class="px-6 py-4 text-xs font-bold text-slate-500 uppercase">Tipo</th>
                 <th class="px-6 py-4 text-xs font-bold text-slate-500 uppercase" v-if="activeTab === 'history'">Archivado</th>
                 <th class="px-6 py-4 text-xs font-bold text-slate-500 uppercase text-right">Total</th>
              </tr>
@@ -112,6 +113,12 @@
                 <td class="px-6 py-4">
                    <span class="px-2 py-1 rounded text-xs font-bold bg-emerald-100 text-emerald-800">PAGADO</span>
                 </td>
+                <td class="px-6 py-4">
+                   <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase" 
+                         :class="item.is_deducible ? 'bg-emerald-50 text-emerald-700' : 'bg-orange-50 text-orange-700'">
+                      {{ item.is_deducible ? 'Deducible' : 'No Deduc.' }}
+                   </span>
+                </td>
                 <td class="px-6 py-4" v-if="activeTab === 'history'">
                    <div class="text-xs text-slate-600 font-mono">{{ fmtDateTime(item.archived_at) }}</div>
                 </td>
@@ -120,7 +127,7 @@
                 </td>
              </tr>
              <tr v-if="items.length === 0">
-                <td :colspan="activeTab === 'history' ? 6 : 5" class="p-8 text-center text-slate-400">
+                <td :colspan="activeTab === 'history' ? 7 : 6" class="p-8 text-center text-slate-400">
                    {{ activeTab === 'pending' ? 'No hay solicitudes pendientes de imprimir.' : 'No se encontraron registros en el historial con estos filtros.' }}
                 </td>
              </tr>
@@ -152,19 +159,12 @@ const refresh = async () => {
    loading.value = true;
    selectedIds.value = []; // Clear selections on refresh
    try {
-      // Logic:
-      // - Pending: Show items that are 'pagado' (PROCESSED) but NOT archived. 
-      //            Month filter is optional but usually we show all pending.
-      // - History: Show items that are 'pagado' AND archived. Month filter applies.
-      
       const params: any = { 
          estado: 'pagado', 
          q: searchQuery.value,
          archived: activeTab.value === 'history' ? 'true' : 'false'
       };
 
-      // Apply month filter. For pending it's usually irrelevant (we want to clear the queue), 
-      // but let's allow it if user sets it.
       if (selectedMonth.value) {
          params.month = selectedMonth.value;
       }
@@ -176,11 +176,7 @@ const refresh = async () => {
    }
 };
 
-// Watch for tab changes to auto-refresh
 watch(activeTab, () => {
-   // Optional: Reset month filter when switching to pending to see everything
-   // if(activeTab.value === 'pending') selectedMonth.value = ''; 
-   // But user might want to filter pending by month too.
    refresh();
 });
 
@@ -219,9 +215,7 @@ const printBatch = async () => {
       document.body.removeChild(link);
       window.URL.revokeObjectURL(url);
       
-      // If we are in 'pending', refresh to move them to history
       if(activeTab.value === 'pending') {
-         // wait a moment for DB
          setTimeout(() => refresh(), 1000);
       }
    } catch (e: any) {

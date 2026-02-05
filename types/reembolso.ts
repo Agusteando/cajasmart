@@ -30,6 +30,9 @@ export type Reembolso = {
   conceptos: ReembolsoConcepto[]
   total: number
 
+  // New field
+  is_deducible: boolean
+
   notas?: string
 
   // Evidencia (1 archivo por reembolso)
