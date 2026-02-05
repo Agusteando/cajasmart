@@ -16,12 +16,14 @@ export async function createNotification(input: NotificationInput) {
   try {
     const db = await useDb();
 
+    // FIX: Removed 'url' and 'actor_user_id' from SQL to prevent DB errors
+    // The link is still sent via Push Notification below.
     const [res]: any = await db.execute(
       `
       INSERT INTO notifications
-        (user_id, type, title, message, reference_type, reference_id, url, actor_user_id, is_read, created_at)
+        (user_id, type, title, message, reference_type, reference_id, is_read, created_at)
       VALUES
-        (?, ?, ?, ?, ?, ?, ?, ?, 0, NOW())
+        (?, ?, ?, ?, ?, ?, 0, NOW())
       `,
       [
         input.userId,
@@ -29,15 +31,13 @@ export async function createNotification(input: NotificationInput) {
         input.title,
         input.message,
         input.referenceType || null,
-        input.referenceId || null,
-        input.url || null,
-        input.actorUserId || null
+        input.referenceId || null
       ]
     );
 
     const id = Number(res?.insertId || 0);
 
-    // Push (best-effort)
+    // Push (best-effort) - URL is still sent here!
     await sendPushToUser(input.userId, {
       title: input.title,
       body: input.message,
@@ -64,16 +64,15 @@ export async function createNotificationsBulk(inputs: NotificationInput[]) {
   const params: any[] = [];
 
   for (const n of inputs) {
-    valuesSql.push('(?, ?, ?, ?, ?, ?, ?, ?, 0, NOW())');
+    // FIX: Removed 'url' and 'actor_user_id' from SQL
+    valuesSql.push('(?, ?, ?, ?, ?, ?, 0, NOW())');
     params.push(
       n.userId,
       n.type,
       n.title,
       n.message,
       n.referenceType || null,
-      n.referenceId || null,
-      n.url || null,
-      n.actorUserId || null
+      n.referenceId || null
     );
   }
 
@@ -81,14 +80,13 @@ export async function createNotificationsBulk(inputs: NotificationInput[]) {
     const [res]: any = await db.execute(
       `
       INSERT INTO notifications
-        (user_id, type, title, message, reference_type, reference_id, url, actor_user_id, is_read, created_at)
+        (user_id, type, title, message, reference_type, reference_id, is_read, created_at)
       VALUES ${valuesSql.join(',')}
       `,
       params
     );
 
     // Push best-effort per user
-    // In a high-scale app, we would queue this. For now, Promise.all is acceptable.
     const pushPromises = inputs.map(n => 
       sendPushToUser(n.userId, {
         title: n.title,
@@ -100,8 +98,6 @@ export async function createNotificationsBulk(inputs: NotificationInput[]) {
       })
     );
     
-    // Don't await push to not block the response time significantly, 
-    // or await if critical. We'll await but catch errors internally in sendPushToUser.
     await Promise.allSettled(pushPromises);
 
     return { inserted: Number(res?.affectedRows || inputs.length) };
@@ -113,9 +109,6 @@ export async function createNotificationsBulk(inputs: NotificationInput[]) {
 
 /**
  * Role-targeted notifications: materialize per user.
- * - Only ACTIVE users.
- * - Filters out the actor (to avoid self-notification).
- * - Handles Plantel Scoping: If plantelId is provided, it targets users of that plantel OR global users (plantel_id IS NULL).
  */
 export async function notifyRoleUsers(
   roleName: string,
@@ -131,7 +124,6 @@ export async function notifyRoleUsers(
   const params: any[] = [roleName];
   let plantelSql = '';
 
-  // Improved Logic: If filtering by Plantel, include the specific plantel AND Global users (NULL)
   if (opts?.plantelId) {
     plantelSql = ' AND (u.plantel_id = ? OR u.plantel_id IS NULL) ';
     params.push(opts.plantelId);
@@ -153,7 +145,6 @@ export async function notifyRoleUsers(
     .map((x: any) => Number(x.id))
     .filter((n: any) => Number.isFinite(n) && n > 0);
 
-  // Filter out the actor to prevent self-notification
   if (opts?.actorUserId) {
     userIds = userIds.filter(id => id !== Number(opts.actorUserId));
   }
