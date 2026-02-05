@@ -1,5 +1,6 @@
 import { useDb } from '~/server/utils/db';
 import { requireAuth } from '~/server/utils/auth';
+import { isFileOnDisk } from '~/server/utils/checkFile';
 
 function mapStatus(s: string): string {
   switch (s) {
@@ -93,7 +94,8 @@ export default defineEventHandler(async (event) => {
     itemsMap[item.reimbursement_id].push(item);
   }
 
-  const results = rows.map((r: any) => {
+  // Convert to async map to allow file system checks
+  const results = await Promise.all(rows.map(async (r: any) => {
     const myItems = itemsMap[r.id] || [];
     
     if (search) {
@@ -107,6 +109,13 @@ export default defineEventHandler(async (event) => {
       if (!haystack.includes(search)) return null;
     }
 
+    // --- CHECK FILE EXISTENCE ON DISK ---
+    const dbFileUrl = myItems[0]?.file_url || null;
+    const existsOnDisk = await isFileOnDisk(dbFileUrl);
+
+    // If verification fails, we return null, triggering the "Red Flag" UI
+    const finalFileUrl = existsOnDisk ? dbFileUrl : null;
+
     return {
       id: String(r.id),
       folio: `R-${String(r.id).padStart(5, '0')}`,
@@ -114,12 +123,13 @@ export default defineEventHandler(async (event) => {
       solicitante: r.solicitante_nombre,
       fechaISO: r.reimbursement_date || r.created_at,
       estado: mapStatus(r.status),
-      raw_status: r.status, // EXPOSED HERE for frontend logic
+      raw_status: r.status, 
       total: Number(r.total_amount),
       is_deducible: !!r.is_deducible,
       notas: r.rejection_reason || null,
       archived_at: r.archived_at,
-      file_url: myItems[0]?.file_url || null,
+      file_url: finalFileUrl, // This will be null if missing on disk
+      db_file_url: dbFileUrl, // Optional: Keep ref to original DB value if you need to show "File Corrupted" specifically
       conceptos: myItems.map((i: any) => ({
         id: String(i.id),
         invoice_date: i.invoice_date,
@@ -130,7 +140,7 @@ export default defineEventHandler(async (event) => {
         amount: Number(i.amount)
       }))
     };
-  }).filter(Boolean);
+  }));
 
-  return { items: results };
+  return { items: results.filter(Boolean) };
 });
