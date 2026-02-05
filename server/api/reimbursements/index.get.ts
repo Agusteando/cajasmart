@@ -19,11 +19,8 @@ export default defineEventHandler(async (event) => {
   
   const search = String(q.q || '').trim().toLowerCase();
   const estadoFilter = String(q.estado || '').trim();
-  const rawStatusFilter = String(q.status || '').trim(); // For Ops/Fiscal specific queries
-  
-  // New Filters for RH
-  const monthFilter = String(q.month || '').trim(); // YYYY-MM
-  const archivedFilter = q.archived; // 'true', 'false', or undefined
+  const monthFilter = String(q.month || '').trim(); 
+  const archivedFilter = q.archived; 
 
   const db = await useDb();
 
@@ -47,7 +44,7 @@ export default defineEventHandler(async (event) => {
     params.push(user.id);
   }
 
-  // 2. Status Mapping Filter (Frontend friendly)
+  // 2. Status Mapping Filter
   if (estadoFilter) {
     if (estadoFilter === 'borrador') conditions.push("r.status = 'DRAFT'");
     else if (estadoFilter === 'en_revision') conditions.push("r.status IN ('PENDING_OPS_REVIEW', 'PENDING_FISCAL_REVIEW')");
@@ -56,26 +53,17 @@ export default defineEventHandler(async (event) => {
     else if (estadoFilter === 'pagado') conditions.push("r.status = 'PROCESSED'");
   }
 
-  // 3. Raw Status Filter (Backend specific)
-  if (rawStatusFilter) {
-    conditions.push('r.status = ?');
-    params.push(rawStatusFilter);
-  }
-
-  // 4. Month Filter (YYYY-MM)
   if (monthFilter) {
     conditions.push("DATE_FORMAT(r.reimbursement_date, '%Y-%m') = ?");
     params.push(monthFilter);
   }
 
-  // 5. Archived/Printed Filter (For RH)
   if (archivedFilter === 'true') {
     conditions.push('r.archived_at IS NOT NULL');
   } else if (archivedFilter === 'false') {
     conditions.push('r.archived_at IS NULL');
   }
 
-  // 6. Text Search
   if (search) {
     conditions.push(`(
       r.id LIKE ? OR 
@@ -93,7 +81,6 @@ export default defineEventHandler(async (event) => {
   const [rows]: any = await db.execute(sql, params);
   if (!rows.length) return { items: [] };
 
-  // Fetch Items for the result set
   const ids = rows.map((r: any) => r.id);
   const placeholders = ids.map(() => '?').join(',');
   const [itemsRows]: any = await db.execute(
@@ -109,7 +96,6 @@ export default defineEventHandler(async (event) => {
   const results = rows.map((r: any) => {
     const myItems = itemsMap[r.id] || [];
     
-    // In-memory search for items details (provider, concept)
     if (search) {
       const haystack = [
         r.id, 
@@ -128,6 +114,7 @@ export default defineEventHandler(async (event) => {
       solicitante: r.solicitante_nombre,
       fechaISO: r.reimbursement_date || r.created_at,
       estado: mapStatus(r.status),
+      raw_status: r.status, // EXPOSED HERE for frontend logic
       total: Number(r.total_amount),
       is_deducible: !!r.is_deducible,
       notas: r.rejection_reason || null,

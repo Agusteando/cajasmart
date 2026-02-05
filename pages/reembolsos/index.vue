@@ -88,6 +88,7 @@
                    <span v-else class="text-slate-300">—</span>
                 </td>
                 <td class="px-6 py-4 text-right">
+                   <!-- Buttons shown based on raw status -->
                    <div class="flex justify-end gap-2 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                       <button v-if="canEdit(it)" @click="openEdit(it)" class="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition" title="Editar">
                          <PencilIcon class="w-4 h-4" />
@@ -290,7 +291,7 @@ import { useUserCookie } from '~/composables/useUserCookie';
 // State
 const user = useUserCookie();
 const items = ref<any[]>([]);
-const availablePlanteles = ref<any[]>([]); // For the dropdown if needed
+const availablePlanteles = ref<any[]>([]); 
 const loading = ref(false);
 const q = ref('');
 const estadoFilter = ref('');
@@ -332,8 +333,15 @@ const estadoBadgeClass = (s: string) => {
    if(s==='pagado') return 'bg-slate-100 text-slate-800';
    return 'bg-indigo-50 text-indigo-800';
 };
-const canEdit = (it:any) => it.estado === 'borrador' || it.estado === 'rechazado';
+
+// --- UPDATED LOGIC HERE ---
+// Allow editing/deleting if it's draft, returned, OR pending ops review (still "en_revision" but earliest stage)
+const canEdit = (it:any) => {
+   const s = it.raw_status || it.estado; // Fallback just in case
+   return s === 'DRAFT' || s === 'RETURNED' || s === 'PENDING_OPS_REVIEW' || it.estado === 'borrador' || it.estado === 'rechazado';
+};
 const canDelete = (it:any) => canEdit(it);
+// --------------------------
 
 // --- LOGIC ---
 
@@ -455,7 +463,9 @@ async function remove(it: any) {
    try {
       await $fetch(`/api/reimbursements/${it.id}`, { method: 'DELETE' });
       await refresh();
-   } catch { alert('No se pudo eliminar'); }
+   } catch (e: any) { 
+      alert(e.data?.statusMessage || 'No se pudo eliminar'); 
+   }
 }
 
 onMounted(async () => {

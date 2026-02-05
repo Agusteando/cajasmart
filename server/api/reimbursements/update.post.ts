@@ -39,7 +39,23 @@ export default defineEventHandler(async (event) => {
   const id = body.id;
   if(!id) throw createError({statusCode:400, statusMessage:'Falta ID'});
 
-  // Parse is_deducible
+  // --- CHECK PERMISSIONS AND STATUS ---
+  const [rRows]: any = await db.execute('SELECT status, user_id FROM reimbursements WHERE id = ?', [id]);
+  const record = rRows?.[0];
+  
+  if (!record) throw createError({statusCode: 404});
+  
+  if (user.role_name !== 'SUPER_ADMIN' && Number(record.user_id) !== Number(user.id)) {
+    throw createError({statusCode: 403});
+  }
+
+  // ✅ ALLOW 'PENDING_OPS_REVIEW' so they can fix mistakes before Ops approves
+  const allowed = ['DRAFT', 'RETURNED', 'PENDING_OPS_REVIEW'];
+  if (!allowed.includes(record.status) && user.role_name !== 'SUPER_ADMIN') {
+    throw createError({ statusCode: 400, statusMessage: 'No se puede editar en este estado.' });
+  }
+  // ------------------------------------
+
   const isDeducible = body.is_deducible === 'true' || body.is_deducible === '1' || body.is_deducible === true;
 
   let fileUrl: string | null = null;
@@ -50,7 +66,6 @@ export default defineEventHandler(async (event) => {
       console.error('Error saving file update', e);
     }
   } else {
-    // Keep existing if not replaced
     const [rows]: any = await db.execute('SELECT file_url FROM reimbursement_items WHERE reimbursement_id = ? LIMIT 1', [id]);
     fileUrl = rows?.[0]?.file_url;
   }
@@ -69,6 +84,7 @@ export default defineEventHandler(async (event) => {
   await connection.beginTransaction();
 
   try {
+    // Reset status to PENDING_OPS_REVIEW if it was returned or edited
     await connection.execute(
       `UPDATE reimbursements 
        SET total_amount = ?, reimbursement_date = ?, is_deducible = ?, status = 'PENDING_OPS_REVIEW', rejection_reason = NULL, returned_by = NULL, updated_at = NOW() 
@@ -76,7 +92,6 @@ export default defineEventHandler(async (event) => {
       [totalAmount, fechaISO, isDeducible ? 1 : 0, id]
     );
 
-    // Replace items logic
     await connection.execute('DELETE FROM reimbursement_items WHERE reimbursement_id = ?', [id]);
 
     for (const c of conceptos) {
@@ -88,7 +103,9 @@ export default defineEventHandler(async (event) => {
 
     await connection.commit();
     await createAuditLog({ entityType: 'reimbursement', entityId: id, action: 'UPDATE', toStatus: 'PENDING_OPS_REVIEW', actorUserId: user.id });
-    await notifyRoleUsers('REVISOR_OPS', 'NEW_REQUEST', 'Solicitud Corregida', `${user.nombre} corrigió #${id}`, 'reimbursement', Number(id));
+    
+    // Notify OPS that it was updated/corrected
+    await notifyRoleUsers('REVISOR_OPS', 'NEW_REQUEST', 'Solicitud Actualizada', `${user.nombre} actualizó la solicitud #${id}`, 'reimbursement', Number(id));
 
     return { ok: true, id };
   } catch (e: any) {

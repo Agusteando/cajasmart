@@ -8,5 +8,6 @@ apps:
       PORT: 15776
       NITRO_LOG_LEVEL: debug
       DOTENV_PATH: C:\Server\htdocs\cajasmart\.env
+      UPLOAD_DIR: 'C:\Server\cajasmart_data\uploads'
     merge_logs: true
     time: true

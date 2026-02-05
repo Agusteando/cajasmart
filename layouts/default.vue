@@ -18,7 +18,7 @@
       <nav class="flex-1 px-4 py-6 space-y-2 overflow-y-auto">
         <p class="px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Principal</p>
 
-        <!-- Keep Dashboard; middleware will redirect non-super admins from / to their role home -->
+        <!-- Dashboard -->
         <NavLink to="/" icon="HomeIcon">Dashboard</NavLink>
 
         <!-- Role workspaces -->
@@ -70,6 +70,7 @@
           <NavLink to="/admin/planteles" icon="BuildingOfficeIcon">Planteles</NavLink>
           <NavLink to="/admin/usuarios" icon="UsersIcon">Usuarios</NavLink>
           <NavLink to="/admin/roles" icon="ShieldCheckIcon">Roles</NavLink>
+          <NavLink to="/admin/super" icon="CommandLineIcon">Super Console</NavLink>
         </div>
       </nav>
 
@@ -138,7 +139,7 @@
         </h2>
 
         <div class="flex items-center gap-4">
-          <!-- Notifications bell (unread badge) -->
+          <!-- Notifications bell -->
           <NotificationsBell />
 
           <span
