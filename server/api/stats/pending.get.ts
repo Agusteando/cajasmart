@@ -5,7 +5,6 @@ export default defineEventHandler(async (event) => {
   const user = requireAuth(event);
   const db = await useDb();
 
-  // Define counts object
   const counts = {
     ops: 0,
     fiscal: 0,
@@ -14,21 +13,32 @@ export default defineEventHandler(async (event) => {
     my_returned: 0
   };
 
+  // Determine filtering SQL based on role
+  let filterSql = '';
+  const filterParams: any[] = [];
+
+  if (user.role_name !== 'SUPER_ADMIN') {
+    // If not super admin, restrict to assigned planteles
+    filterSql = ` AND plantel_id IN (SELECT plantel_id FROM user_planteles WHERE user_id = ?)`;
+    filterParams.push(user.id);
+  }
+
   // 1. Get functional queue counts (For Admins/Reviewers)
   const [queueRows]: any = await db.execute(`
     SELECT status, COUNT(*) as c 
     FROM reimbursements 
     WHERE status IN ('PENDING_OPS_REVIEW', 'PENDING_FISCAL_REVIEW', 'APPROVED')
+    ${filterSql}
     GROUP BY status
-  `);
+  `, filterParams);
 
   for (const row of queueRows) {
     if (row.status === 'PENDING_OPS_REVIEW') counts.ops = Number(row.c);
     if (row.status === 'PENDING_FISCAL_REVIEW') counts.fiscal = Number(row.c);
-    if (row.status === 'APPROVED') counts.treasury = Number(row.c); // Approved = Pending Payment
+    if (row.status === 'APPROVED') counts.treasury = Number(row.c); 
   }
 
-  // 2. Get personal counts (For Requesters)
+  // 2. Get personal counts (For Requesters - purely based on user_id)
   const [myRows]: any = await db.execute(`
     SELECT status, COUNT(*) as c
     FROM reimbursements

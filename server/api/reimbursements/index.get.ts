@@ -19,13 +19,8 @@ export default defineEventHandler(async (event) => {
   const q = getQuery(event);
   
   const search = String(q.q || '').trim().toLowerCase();
-  
-  // Existing 'estado' mapping (borrador, en_revision, etc.)
   const estadoFilter = String(q.estado || '').trim();
-  
-  // NEW: Exact status filtering (e.g. 'PENDING_OPS_REVIEW')
   const statusFilter = String(q.status || '').trim();
-  
   const monthFilter = String(q.month || '').trim(); 
   const archivedFilter = q.archived; 
 
@@ -45,13 +40,25 @@ export default defineEventHandler(async (event) => {
   const conditions: string[] = [];
   const params: any[] = [];
 
-  // 1. Role Scoping
-  if (user.role_name === 'ADMIN_PLANTEL') {
+  // 1. Role Scoping & Multi-Plantel Logic
+  if (user.role_name === 'SUPER_ADMIN') {
+    // Super Admin sees everything, no filter needed
+  } else if (user.role_name === 'ADMIN_PLANTEL') {
+    // ADMIN_PLANTEL only sees their own requests
     conditions.push('r.user_id = ?');
+    params.push(user.id);
+  } else {
+    // Reviewers (OPS, FISCAL, TESORERIA, RH) see requests from their assigned planteles
+    // Uses the new user_planteles table
+    conditions.push(`
+      r.plantel_id IN (
+        SELECT plantel_id FROM user_planteles WHERE user_id = ?
+      )
+    `);
     params.push(user.id);
   }
 
-  // 2. Status Mapping Filter (User-friendly grouping)
+  // 2. Status Mapping Filter
   if (estadoFilter) {
     if (estadoFilter === 'borrador') conditions.push("r.status = 'DRAFT'");
     else if (estadoFilter === 'en_revision') conditions.push("r.status IN ('PENDING_OPS_REVIEW', 'PENDING_FISCAL_REVIEW')");
@@ -60,8 +67,7 @@ export default defineEventHandler(async (event) => {
     else if (estadoFilter === 'pagado') conditions.push("r.status = 'PROCESSED'");
   }
 
-  // 3. Exact Status Filter (System/Role-specific queues)
-  // This fixes the issue where Ops/Fiscal requests were returning all items
+  // 3. Exact Status Filter
   if (statusFilter) {
     conditions.push('r.status = ?');
     params.push(statusFilter);
@@ -107,7 +113,6 @@ export default defineEventHandler(async (event) => {
     itemsMap[item.reimbursement_id].push(item);
   }
 
-  // Convert to async map to allow file system checks
   const results = await Promise.all(rows.map(async (r: any) => {
     const myItems = itemsMap[r.id] || [];
     
@@ -122,11 +127,8 @@ export default defineEventHandler(async (event) => {
       if (!haystack.includes(search)) return null;
     }
 
-    // --- CHECK FILE EXISTENCE ON DISK ---
     const dbFileUrl = myItems[0]?.file_url || null;
     const existsOnDisk = await isFileOnDisk(dbFileUrl);
-
-    // If verification fails, we return null, triggering the "Red Flag" UI
     const finalFileUrl = existsOnDisk ? dbFileUrl : null;
 
     return {
@@ -141,8 +143,8 @@ export default defineEventHandler(async (event) => {
       is_deducible: !!r.is_deducible,
       notas: r.rejection_reason || null,
       archived_at: r.archived_at,
-      file_url: finalFileUrl, // This will be null if missing on disk
-      db_file_url: dbFileUrl, // Optional: Keep ref to original DB value if you need to show "File Corrupted" specifically
+      file_url: finalFileUrl, 
+      db_file_url: dbFileUrl, 
       conceptos: myItems.map((i: any) => ({
         id: String(i.id),
         invoice_date: i.invoice_date,

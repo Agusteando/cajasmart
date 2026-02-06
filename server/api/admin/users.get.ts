@@ -6,6 +6,7 @@ export default defineEventHandler(async (event) => {
 
   const db = await useDb();
 
+  // 1. Fetch Users
   const [rows]: any = await db.execute(
     `SELECT
        u.id, u.nombre, u.email, u.activo, u.plantel_id, u.avatar_url,
@@ -18,5 +19,29 @@ export default defineEventHandler(async (event) => {
      LIMIT 500`
   );
 
-  return rows || [];
+  // 2. Fetch User Plantel Assignments (Junction Table)
+  const userIds = rows.map((u: any) => u.id);
+  let assignments: any[] = [];
+  
+  if (userIds.length > 0) {
+    const placeholders = userIds.map(() => '?').join(',');
+    const [aRows]: any = await db.execute(
+      `SELECT user_id, plantel_id FROM user_planteles WHERE user_id IN (${placeholders})`,
+      userIds
+    );
+    assignments = aRows;
+  }
+
+  // 3. Map assignments to users
+  const assignmentMap: Record<number, number[]> = {};
+  for (const a of assignments) {
+    if (!assignmentMap[a.user_id]) assignmentMap[a.user_id] = [];
+    assignmentMap[a.user_id].push(a.plantel_id);
+  }
+
+  // 4. Attach to user objects
+  return rows.map((u: any) => ({
+    ...u,
+    assigned_plantel_ids: assignmentMap[u.id] || []
+  }));
 });
