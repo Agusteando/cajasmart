@@ -13,92 +13,63 @@ jobs:
         shell: powershell
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      # Build toolchain (Node 20)
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20.19.0"
 
-      # FIX: Aggressive cleanup to prevent flaky builds due to stale cache
-      - name: Clean Workspace Cache
-        run: |
-          $ErrorActionPreference = "Continue" # Don't stop if files don't exist
-          Write-Host "Cleaning stale build artifacts..."
-          Remove-Item -Path ".nuxt" -Recurse -Force -ErrorAction SilentlyContinue
-          Remove-Item -Path ".output" -Recurse -Force -ErrorAction SilentlyContinue
-          Remove-Item -Path "dist" -Recurse -Force -ErrorAction SilentlyContinue
-          Remove-Item -Path "node_modules" -Recurse -Force -ErrorAction SilentlyContinue
-          # Also clean Vite cache if it exists
-          Remove-Item -Path "node_modules/.cache" -Recurse -Force -ErrorAction SilentlyContinue
-          Write-Host "Workspace clean."
-
-      - name: Install dependencies
-        run: |
-          $ErrorActionPreference = "Stop"
-          npm install
-
-      - name: Build
-        run: |
-          $ErrorActionPreference = "Stop"
-          # nuxi cleanup is a native Nuxt command to clear internal caches
-          npx nuxi cleanup
-          npm run build
-
-      - name: Deploy to Production
+      - name: Deploy (git pull/reset, preserve uploads)
+        env:
+          REPO_URL: https://github.com/Agusteando/cajasmart.git
+          BRANCH: main
         run: |
           $ErrorActionPreference = "Stop"
 
-          $TARGET = "C:\Server\htdocs\cajasmart"
-          $PROD_ENV = Join-Path $TARGET ".env"
+          $TARGET  = "C:\Server\htdocs\cajasmart"
+          $BRANCH  = $env:BRANCH
+          $REPO_URL = $env:REPO_URL
 
-          # Create directory if missing
           if (!(Test-Path $TARGET)) {
             New-Item -ItemType Directory -Force -Path $TARGET | Out-Null
           }
 
-          # Graceful PM2 Stop (Prevent error if not running)
+          Set-Location $TARGET
+
+          if (!(Test-Path (Join-Path $TARGET ".git"))) {
+            throw "Missing .git in $TARGET. Refusing to init/clone automatically to protect existing uploads."
+          }
+
+          git config --global --add safe.directory $TARGET | Out-Null
+
+          # Ensure origin is correct
+          $originUrl = git remote get-url origin 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            git remote add origin $REPO_URL
+          } elseif ($originUrl -ne $REPO_URL) {
+            git remote set-url origin $REPO_URL
+          }
+
+          # Update to latest commit (keeps untracked uploads)
+          git fetch origin --prune
+          git checkout -B $BRANCH origin/$BRANCH --force
+          git reset --hard origin/$BRANCH
+
+          # Stop app if running
           pm2 delete cajasmart -s 2>$null
 
-          # Back up .env
-          $envBackup = $null
-          if (Test-Path $PROD_ENV) {
-            $envBackup = Join-Path $env:TEMP ("cajasmart.env." + [guid]::NewGuid().ToString() + ".bak")
-            Copy-Item $PROD_ENV $envBackup -Force
-          }
+          # Build + prune dev deps
+          npm ci
+          npx nuxi cleanup
+          npm run build
+          npm prune --omit=dev
 
-          # Wipe target directory
-          Get-ChildItem $TARGET -Force | Remove-Item -Recurse -Force
-
-          # Restore .env
-          if ($envBackup -ne $null) {
-            Copy-Item $envBackup $PROD_ENV -Force
-            Remove-Item $envBackup -Force
-          }
-
-          # Copy artifacts (excluding git/github/source node_modules)
-          # We copy the entire structure so .output works correctly
-          Copy-Item (Join-Path $env:GITHUB_WORKSPACE "*") $TARGET -Recurse -Force `
-            -Exclude ".git",".github","node_modules",".nuxt"
-
-          # Verify Critical Files
-          if (!(Test-Path (Join-Path $TARGET "package.json"))) { throw "Missing package.json" }
-          if (!(Test-Path (Join-Path $TARGET ".output\server\index.mjs"))) { throw "Missing build output" }
-          if (!(Test-Path (Join-Path $TARGET "process.yml"))) { throw "Missing process.yml" }
-
-          # Install Production Dependencies
-          Set-Location $TARGET
-          npm install --omit=dev
-
-          # Start App
+          # Start app
           pm2 start process.yml
           pm2 save
 
-          # Health Check (Wait up to 10 seconds for boot)
+          # Health check
           Start-Sleep -Seconds 5
-          $status = node -e @"
+          node -e @"
           try {
             const { execSync } = require('child_process');
             const list = JSON.parse(execSync('pm2 jlist', { stdio: ['ignore','pipe','pipe'] }).toString());
