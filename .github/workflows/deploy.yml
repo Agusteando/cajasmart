@@ -16,48 +16,60 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Build toolchain needs Node 20+ (does NOT change your server-installed Node)
-      - name: Setup Node.js (CI only)
+      # Build toolchain (Node 20)
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20.19.0"
 
-      - name: Install deps (workspace)
+      # FIX: Aggressive cleanup to prevent flaky builds due to stale cache
+      - name: Clean Workspace Cache
+        run: |
+          $ErrorActionPreference = "Continue" # Don't stop if files don't exist
+          Write-Host "Cleaning stale build artifacts..."
+          Remove-Item -Path ".nuxt" -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item -Path ".output" -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item -Path "dist" -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item -Path "node_modules" -Recurse -Force -ErrorAction SilentlyContinue
+          # Also clean Vite cache if it exists
+          Remove-Item -Path "node_modules/.cache" -Recurse -Force -ErrorAction SilentlyContinue
+          Write-Host "Workspace clean."
+
+      - name: Install dependencies
         run: |
           $ErrorActionPreference = "Stop"
-          Set-Location $env:GITHUB_WORKSPACE
-          if (Test-Path node_modules) { Remove-Item node_modules -Recurse -Force }
           npm install
 
-      - name: Build (workspace)
+      - name: Build
         run: |
           $ErrorActionPreference = "Stop"
-          Set-Location $env:GITHUB_WORKSPACE
-          npx nuxi prepare
+          # nuxi cleanup is a native Nuxt command to clear internal caches
+          npx nuxi cleanup
           npm run build
 
-      - name: Deploy to Production Folder (full repo)
+      - name: Deploy to Production
         run: |
           $ErrorActionPreference = "Stop"
 
           $TARGET = "C:\Server\htdocs\cajasmart"
           $PROD_ENV = Join-Path $TARGET ".env"
 
+          # Create directory if missing
           if (!(Test-Path $TARGET)) {
             New-Item -ItemType Directory -Force -Path $TARGET | Out-Null
           }
 
-          # Stop/remove existing process (idempotent)
+          # Graceful PM2 Stop (Prevent error if not running)
           pm2 delete cajasmart -s 2>$null
 
-          # Preserve existing .env if present
+          # Back up .env
           $envBackup = $null
           if (Test-Path $PROD_ENV) {
             $envBackup = Join-Path $env:TEMP ("cajasmart.env." + [guid]::NewGuid().ToString() + ".bak")
             Copy-Item $PROD_ENV $envBackup -Force
           }
 
-          # Clean target completely
+          # Wipe target directory
           Get-ChildItem $TARGET -Force | Remove-Item -Recurse -Force
 
           # Restore .env
@@ -66,42 +78,38 @@ jobs:
             Remove-Item $envBackup -Force
           }
 
-          # Copy the entire repo to target (excluding junk)
+          # Copy artifacts (excluding git/github/source node_modules)
+          # We copy the entire structure so .output works correctly
           Copy-Item (Join-Path $env:GITHUB_WORKSPACE "*") $TARGET -Recurse -Force `
-            -Exclude ".git",".github","node_modules"
+            -Exclude ".git",".github","node_modules",".nuxt"
 
-          # Sanity checks: ensure repo + build output exist
-          if (!(Test-Path (Join-Path $TARGET "package.json"))) {
-            throw "DEPLOY FAILED: package.json missing in $TARGET"
-          }
-          if (!(Test-Path (Join-Path $TARGET ".output\server\index.mjs"))) {
-            throw "DEPLOY FAILED: .output\server\index.mjs missing in $TARGET (build output not copied)"
-          }
-          if (!(Test-Path (Join-Path $TARGET "process.yml"))) {
-            throw "DEPLOY FAILED: process.yml missing in $TARGET"
-          }
+          # Verify Critical Files
+          if (!(Test-Path (Join-Path $TARGET "package.json"))) { throw "Missing package.json" }
+          if (!(Test-Path (Join-Path $TARGET ".output\server\index.mjs"))) { throw "Missing build output" }
+          if (!(Test-Path (Join-Path $TARGET "process.yml"))) { throw "Missing process.yml" }
 
-          # Install prod deps on server folder (runtime deps)
+          # Install Production Dependencies
           Set-Location $TARGET
-          if (Test-Path node_modules) { Remove-Item node_modules -Recurse -Force }
           npm install --omit=dev
 
-          # Start app using process.yml
+          # Start App
           pm2 start process.yml
           pm2 save
 
-          # Fail if not online (use Node JSON.parse to avoid PowerShell duplicate-key failure)
+          # Health Check (Wait up to 10 seconds for boot)
+          Start-Sleep -Seconds 5
           $status = node -e @"
-          const { execSync } = require('child_process');
-          const list = JSON.parse(execSync('pm2 jlist', { stdio: ['ignore','pipe','pipe'] }).toString());
-          const app = list.find(p => p && p.name === 'cajasmart');
-          if (!app) process.exit(10);
-          if (!app.pm2_env || app.pm2_env.status !== 'online') process.exit(11);
+          try {
+            const { execSync } = require('child_process');
+            const list = JSON.parse(execSync('pm2 jlist', { stdio: ['ignore','pipe','pipe'] }).toString());
+            const app = list.find(p => p && p.name === 'cajasmart');
+            if (!app) process.exit(10);
+            if (!app.pm2_env || app.pm2_env.status !== 'online') process.exit(11);
+            console.log('App is ONLINE');
+          } catch (e) { process.exit(12); }
           "@
 
           if ($LASTEXITCODE -ne 0) {
             pm2 list
-            if ($LASTEXITCODE -eq 10) { throw "PM2 did not create/find process 'cajasmart' after start" }
-            if ($LASTEXITCODE -eq 11) { throw "PM2 started 'cajasmart' but it is not online" }
-            throw "PM2 health check failed with exit code $LASTEXITCODE"
+            throw "PM2 Health Check Failed. Exit Code: $LASTEXITCODE"
           }

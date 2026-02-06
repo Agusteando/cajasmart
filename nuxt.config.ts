@@ -1,15 +1,12 @@
 export default defineNuxtConfig({
-  // REMOVED '@nuxtjs/tailwindcss'
   modules: ['@pinia/nuxt'],
 
-  // Add the CSS file manually
   css: ['~/assets/css/main.css'],
 
   build: {
     transpile: ['@heroicons/vue']
   },
 
-  // Manual PostCSS configuration
   postcss: {
     plugins: {
       tailwindcss: {},
@@ -33,7 +30,9 @@ export default defineNuxtConfig({
     vapidPrivateKey: process.env.VAPID_PRIVATE_KEY || '',
     public: {
       appName: 'CajaSmart IECS-IEDIS',
-      vapidPublicKey: process.env.VAPID_PUBLIC_KEY || ''
+      vapidPublicKey: process.env.VAPID_PUBLIC_KEY || '',
+      // Define a build ID at build time. Used for version mismatch detection.
+      buildId: process.env.BUILD_ID || Date.now().toString()
     }
   }
 });

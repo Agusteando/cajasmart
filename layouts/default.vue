@@ -1,5 +1,7 @@
 <template>
   <div class="flex h-screen overflow-hidden bg-slate-50">
+    <MaintenanceOverlay :visible="isMaintenance" />
+
     <!-- Sidebar -->
     <aside class="w-72 bg-slate-900 text-white flex flex-col transition-all duration-300 shadow-xl z-20">
       <!-- Brand Header -->
@@ -100,7 +102,6 @@
         </div>
 
         <div class="flex items-center gap-3">
-          <!-- AVATAR LOGIC RESTORED -->
           <img
             v-if="user?.avatar"
             :src="user.avatar"
@@ -169,16 +170,18 @@ const userCookie = useUserCookie();
 
 const user = computed(() => userCookie.value);
 
+// System Status Polling
+const { isMaintenance, startPolling } = useSystemStatus();
+
 // Counts state for badges
 const counts = ref({ ops: 0, fiscal: 0, treasury: 0, my_drafts: 0, my_returned: 0 });
 
 async function updateCounts() {
   if (user.value) {
     try {
-      // Ensure the endpoint exists (created in previous step) or remove this call if not using the badge feature
       counts.value = await $fetch('/api/stats/pending');
     } catch (e) { 
-      // Silent fail if endpoint doesn't exist yet
+      // Silent fail
     }
   }
 }
@@ -200,6 +203,7 @@ const logout = () => {
 
 onMounted(() => {
   updateCounts();
-  setInterval(updateCounts, 10000); // Live update badges
+  startPolling(); // Start watching for deployments
+  setInterval(updateCounts, 10000); 
 });
 </script>
