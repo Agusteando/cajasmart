@@ -171,12 +171,10 @@ const fmtDate = (d: string) => d ? new Date(d).toLocaleDateString('es-MX') : '-'
 
 async function fetchItems() {
   loading.value = true;
-  // Fetch pending review items
-  const res = await $fetch<any>('/api/reimbursements', { params: { estado: 'en_revision' } });
+  // Use specific status filter for Fiscal, so we don't fetch Ops items
+  const res = await $fetch<any>('/api/reimbursements', { params: { status: 'PENDING_FISCAL_REVIEW' } });
   
-  // Filter specifically for items in the FISCAL queue if the API returns mixed states
-  // Assuming 'en_revision' might return Ops Pending too. We filter by raw status.
-  items.value = (res.items || []).filter((i: any) => i.raw_status === 'PENDING_FISCAL_REVIEW');
+  items.value = res.items || [];
   
   // Auto-select first if available and none selected
   if (items.value.length > 0 && !activeItem.value) {

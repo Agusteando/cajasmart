@@ -21,7 +21,9 @@ const VALID_TRANSITIONS: Record<string, Record<string, { requiredRole: string; n
     RETURN: { requiredRole: 'REVISOR_FISCAL', nextStatus: 'RETURNED' }
   },
   APPROVED: {
-    PROCESS: { requiredRole: 'TESORERIA', nextStatus: 'PROCESSED' }
+    PROCESS: { requiredRole: 'TESORERIA', nextStatus: 'PROCESSED' },
+    // ADDED: Allow Treasury to return an approved item (e.g. invalid bank info)
+    RETURN: { requiredRole: 'TESORERIA', nextStatus: 'RETURNED' }
   }
 };
 
@@ -38,7 +40,7 @@ export default defineEventHandler(async (event) => {
     });
   }
 
-  if (action === 'RETURN' && !reason?.trim()) {
+  if (action === 'RETURN' && !String(reason || '').trim()) {
     throw createError({
       statusCode: 400,
       statusMessage: 'El motivo de devolución es requerido'
@@ -84,7 +86,8 @@ export default defineEventHandler(async (event) => {
 
   const newStatus = transition.nextStatus;
 
-  let updateFields: string[] = ['status = ?'];
+  // Build update query based on action
+  let updateFields: string[] = ['status = ?', 'updated_at = NOW()'];
   let updateParams: any[] = [newStatus];
 
   if (action === 'RETURN') {
@@ -95,6 +98,7 @@ export default defineEventHandler(async (event) => {
     updateParams.push(user.id, paymentRef || null);
   }
 
+  // Clear rejection info if we are re-approving (unlikely in this flow, but good practice)
   if (action === 'APPROVE') {
     updateFields.push('rejection_reason = NULL', 'returned_by = NULL');
   }
@@ -118,12 +122,12 @@ export default defineEventHandler(async (event) => {
           : undefined
   });
 
-  const amount = parseFloat(reimbursement.amount).toFixed(2);
+  const amount = parseFloat(reimbursement.total_amount).toFixed(2);
 
+  // NOTIFICATIONS
   switch (action) {
     case 'APPROVE':
       if (newStatus === 'PENDING_FISCAL_REVIEW') {
-        // FIX: Passed actorUserId
         await notifyRoleUsers(
           'REVISOR_FISCAL',
           'NEW_PENDING',
@@ -134,7 +138,6 @@ export default defineEventHandler(async (event) => {
           { url: '/fiscal', actorUserId: user.id }
         );
       } else if (newStatus === 'APPROVED') {
-        // FIX: Passed actorUserId
         await notifyRoleUsers(
           'TESORERIA',
           'APPROVED',

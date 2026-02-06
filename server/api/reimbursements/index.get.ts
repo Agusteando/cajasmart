@@ -19,7 +19,13 @@ export default defineEventHandler(async (event) => {
   const q = getQuery(event);
   
   const search = String(q.q || '').trim().toLowerCase();
+  
+  // Existing 'estado' mapping (borrador, en_revision, etc.)
   const estadoFilter = String(q.estado || '').trim();
+  
+  // NEW: Exact status filtering (e.g. 'PENDING_OPS_REVIEW')
+  const statusFilter = String(q.status || '').trim();
+  
   const monthFilter = String(q.month || '').trim(); 
   const archivedFilter = q.archived; 
 
@@ -45,13 +51,20 @@ export default defineEventHandler(async (event) => {
     params.push(user.id);
   }
 
-  // 2. Status Mapping Filter
+  // 2. Status Mapping Filter (User-friendly grouping)
   if (estadoFilter) {
     if (estadoFilter === 'borrador') conditions.push("r.status = 'DRAFT'");
     else if (estadoFilter === 'en_revision') conditions.push("r.status IN ('PENDING_OPS_REVIEW', 'PENDING_FISCAL_REVIEW')");
     else if (estadoFilter === 'aprobado') conditions.push("r.status = 'APPROVED'");
     else if (estadoFilter === 'rechazado') conditions.push("r.status = 'RETURNED'");
     else if (estadoFilter === 'pagado') conditions.push("r.status = 'PROCESSED'");
+  }
+
+  // 3. Exact Status Filter (System/Role-specific queues)
+  // This fixes the issue where Ops/Fiscal requests were returning all items
+  if (statusFilter) {
+    conditions.push('r.status = ?');
+    params.push(statusFilter);
   }
 
   if (monthFilter) {
