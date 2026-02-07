@@ -9,7 +9,6 @@ import sharp from 'sharp';
 
 // Helper to draw table cell borders/text
 function drawCell(page: any, x: number, y: number, width: number, height: number, text: string, font: any, fontSize: number = 9) {
-  // Border
   page.drawRectangle({
     x,
     y: y - height,
@@ -19,7 +18,6 @@ function drawCell(page: any, x: number, y: number, width: number, height: number
     borderWidth: 1,
   });
 
-  // Text (centered vertically, left aligned with padding)
   if (text) {
     const cleanText = String(text).replace(/\n/g, ' ').substring(0, 55); 
     page.drawText(cleanText, {
@@ -33,8 +31,8 @@ function drawCell(page: any, x: number, y: number, width: number, height: number
 }
 
 export default defineEventHandler(async (event) => {
-  // CHANGED: Added TESORERIA, removed RH requirement (though kept for legacy safety if role still exists)
-  const user = requireRole(event, ['RH', 'TESORERIA', 'SUPER_ADMIN']);
+  // TESORERIA now handles printing
+  const user = requireRole(event, ['TESORERIA', 'SUPER_ADMIN']);
   const body = await readBody(event);
   const { ids } = body;
 
@@ -44,7 +42,6 @@ export default defineEventHandler(async (event) => {
 
   const db = await useDb();
 
-  // 1. Fetch Data with Razon Social Join
   const placeholders = ids.map(() => '?').join(',');
   const [reimbursements]: any = await db.execute(
     `SELECT r.*, 
@@ -71,7 +68,6 @@ export default defineEventHandler(async (event) => {
     itemsMap[item.reimbursement_id].push(item);
   }
 
-  // 2. Prepare Logo
   let logoBuffer: Buffer | null = null;
   const logoPath = path.resolve(process.cwd(), 'public/logo.webp');
   
@@ -83,7 +79,6 @@ export default defineEventHandler(async (event) => {
     }
   }
 
-  // 3. Create Master PDF
   const pdfDoc = await PDFDocument.create();
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
   const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
@@ -112,7 +107,6 @@ export default defineEventHandler(async (event) => {
     const { width, height } = page.getSize();
     let y = height - 60;
 
-    // Header Layout
     if (embeddedLogo) {
       const logoDims = embeddedLogo.scale(0.5); 
       page.drawImage(embeddedLogo, {
@@ -134,7 +128,6 @@ export default defineEventHandler(async (event) => {
     const titleWidth = fontBold.widthOfTextAtSize(title, 12);
     page.drawText(title, { x: centerX - (titleWidth / 2), y: y - 15, size: 12, font: fontBold, color: rgb(0, 0, 0) });
     
-    // NEW: Render NO DEDUCIBLE warning if applicable
     if (!isDeducible) {
       const warn = 'NO DEDUCIBLE';
       const warnWidth = fontBold.widthOfTextAtSize(warn, 14);
@@ -143,13 +136,12 @@ export default defineEventHandler(async (event) => {
         y: y - 35, 
         size: 14, 
         font: fontBold, 
-        color: rgb(1, 0, 0) // Red
+        color: rgb(1, 0, 0) 
       });
     }
 
     y -= 50;
 
-    // Header Fields
     page.drawText(`PLANTEL: ${r.plantel_nombre || 'N/A'}`, { x: 50, y, size: 10, font });
     y -= 18;
     page.drawText(`NOMBRE DEL ADMINISTRADOR: ${r.solicitante_nombre}`, { x: 50, y, size: 10, font });
@@ -160,7 +152,6 @@ export default defineEventHandler(async (event) => {
     page.drawText(`FOLIO: R-${String(r.id).padStart(5, '0')}`, { x: 430, y: y + 3, size: 12, font: fontBold, color: rgb(0.8, 0, 0) });
     y -= 30;
 
-    // Table Header
     const cols = [
       { name: 'FECHA', w: 60 },
       { name: 'FACTURA', w: 70 },
@@ -177,7 +168,6 @@ export default defineEventHandler(async (event) => {
     }
     y -= 20;
 
-    // Table Rows
     for (const item of rItems) {
       if (y < 100) { }
       x = 40;
@@ -190,12 +180,10 @@ export default defineEventHandler(async (event) => {
       y -= 20;
     }
 
-    // Total Row
     drawCell(page, 40, y, 470, 20, 'TOTAL', fontBold);
     drawCell(page, 510, y, 60, 20, `$${total.toFixed(2)}`, fontBold);
     y -= 60;
 
-    // Signatures
     const sigY = y;
     page.drawLine({ start: { x: 60, y: sigY }, end: { x: 240, y: sigY }, thickness: 1 });
     page.drawText('ENTREGA ADMINISTRADOR', { x: 90, y: sigY - 12, size: 8, font });
@@ -203,7 +191,6 @@ export default defineEventHandler(async (event) => {
     page.drawLine({ start: { x: 340, y: sigY }, end: { x: 520, y: sigY }, thickness: 1 });
     page.drawText('RECIBE: TESORERÍA / BANCOS', { x: 370, y: sigY - 12, size: 8, font });
 
-    // Footer
     page.drawText(`Sistema CajaSmart | Batch: ${batchId} | Printed: ${new Date().toISOString()}`, {
       x: 40,
       y: 10,
@@ -212,7 +199,6 @@ export default defineEventHandler(async (event) => {
       color: rgb(0.6, 0.6, 0.6)
     });
 
-    // --- B. Merge Attachment ---
     const uniqueFiles = [...new Set(rItems.map((i: any) => i.file_url).filter(Boolean))];
 
     for (const fileUrl of uniqueFiles) {
@@ -259,14 +245,12 @@ export default defineEventHandler(async (event) => {
     }
   }
 
-  // 4. Update Database (Mark as Printed/Archived)
-  // We do this before sending response.
+  // MARK AS ARCHIVED / PRINTED
   await db.execute(
     `UPDATE reimbursements SET archived_at = NOW(), archived_by = ? WHERE id IN (${placeholders})`,
     [user.id, ...ids]
   );
 
-  // 5. Finalize
   const pdfBytes = await pdfDoc.save();
 
   await createAuditLog({

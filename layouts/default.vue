@@ -4,7 +4,6 @@
 
     <!-- Sidebar -->
     <aside class="w-72 bg-slate-900 text-white flex flex-col transition-all duration-300 shadow-xl z-20">
-      <!-- Brand Header -->
       <div class="h-20 flex items-center px-8 border-b border-slate-800">
         <div class="flex items-center gap-3">
           <div
@@ -16,14 +15,11 @@
         </div>
       </div>
 
-      <!-- Navigation Links -->
       <nav class="flex-1 px-4 py-6 space-y-2 overflow-y-auto">
         <p class="px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Principal</p>
 
-        <!-- Dashboard -->
         <NavLink to="/" icon="HomeIcon">Dashboard</NavLink>
 
-        <!-- Role workspaces -->
         <NavLink
           v-if="user?.role_name === 'ADMIN_PLANTEL' || user?.role_name === 'SUPER_ADMIN'"
           to="/reembolsos"
@@ -59,12 +55,9 @@
           Tesorería / Bancos
           <span v-if="counts.treasury > 0" class="ml-auto bg-emerald-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">{{ counts.treasury }}</span>
         </NavLink>
-        
-        <!-- Removed RH Link here -->
 
         <NavLink to="/notificaciones" icon="BellIcon">Notificaciones</NavLink>
 
-        <!-- Admin Section -->
         <div v-if="user?.role_name === 'SUPER_ADMIN'">
           <p class="px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider mt-8 mb-2">Gestión</p>
           <NavLink to="/admin/planteles" icon="BuildingOfficeIcon">Planteles</NavLink>
@@ -74,9 +67,7 @@
         </div>
       </nav>
 
-      <!-- User Profile & Logout -->
       <div class="p-6 border-t border-slate-800 bg-slate-900 space-y-4">
-        <!-- Impersonation banner -->
         <div
           v-if="user?.is_impersonating"
           class="rounded-xl border border-amber-400/30 bg-amber-500/10 px-3 py-2"
@@ -125,9 +116,7 @@
       </div>
     </aside>
 
-    <!-- Main Content Area -->
     <main class="flex-1 flex flex-col min-w-0 overflow-hidden relative">
-      <!-- Top Header -->
       <header
         class="h-20 bg-white border-b border-slate-200 flex items-center justify-between px-8 sticky top-0 z-10"
       >
@@ -136,7 +125,6 @@
         </h2>
 
         <div class="flex items-center gap-4">
-          <!-- Notifications bell -->
           <NotificationsBell />
 
           <span
@@ -164,19 +152,14 @@ const userCookie = useUserCookie();
 
 const user = computed(() => userCookie.value);
 
-// System Status Polling
 const { isMaintenance, startPolling } = useSystemStatus();
-
-// Counts state for badges
 const counts = ref({ ops: 0, fiscal: 0, treasury: 0, my_drafts: 0, my_returned: 0 });
 
 async function updateCounts() {
   if (user.value) {
     try {
       counts.value = await $fetch('/api/stats/pending');
-    } catch (e) { 
-      // Silent fail
-    }
+    } catch (e) { }
   }
 }
 
@@ -197,7 +180,7 @@ const logout = () => {
 
 onMounted(() => {
   updateCounts();
-  startPolling(); // Start watching for deployments
+  startPolling();
   setInterval(updateCounts, 10000); 
 });
 </script>

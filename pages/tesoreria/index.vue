@@ -4,7 +4,7 @@
     <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
       <div>
         <h1 class="text-3xl font-bold text-slate-900">Tesorería / Bancos</h1>
-        <p class="text-slate-500 mt-1">Gestión de pagos, impresión y archivo.</p>
+        <p class="text-slate-500 mt-1">Gestión de impresiones, archivo y pagos finales.</p>
       </div>
       
       <!-- Actions Toolbar -->
@@ -13,28 +13,28 @@
             {{ selectedIds.length }} seleccionados
          </div>
          
-         <!-- Action: PAY (Process) -->
+         <!-- Action 1: PRINT (To Archive) -->
          <button 
-            v-if="activeTab === 'approval'"
-            @click="confirmBatchProcess" 
-            :disabled="processing"
-            class="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-2.5 rounded-xl font-bold shadow-lg shadow-emerald-200 flex items-center gap-2 transition-all disabled:opacity-50"
-         >
-            <CurrencyDollarIcon v-if="!processing" class="w-5 h-5" />
-            <span v-else class="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
-            {{ processing ? 'Procesando...' : 'Marcar PAGADO' }}
-         </button>
-
-         <!-- Action: PRINT (Archive) -->
-         <button 
-            v-if="activeTab !== 'approval'"
+            v-if="activeTab === 'printing'"
             @click="printBatch" 
             :disabled="processing"
             class="bg-slate-900 hover:bg-slate-800 text-white px-6 py-2.5 rounded-xl font-bold shadow-lg flex items-center gap-2 transition-all disabled:opacity-50"
          >
             <PrinterIcon v-if="!processing" class="w-5 h-5" />
             <span v-else class="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
-            {{ processing ? 'Generando...' : (activeTab === 'printing' ? 'Imprimir y Archivar' : 'Re-Imprimir Copia') }}
+            {{ processing ? 'Generando PDF...' : 'Imprimir y Archivar' }}
+         </button>
+
+         <!-- Action 2: PAY (Final) -->
+         <button 
+            v-if="activeTab === 'payment'"
+            @click="openPaymentModal" 
+            :disabled="processing"
+            class="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-2.5 rounded-xl font-bold shadow-lg shadow-emerald-200 flex items-center gap-2 transition-all disabled:opacity-50"
+         >
+            <CurrencyDollarIcon v-if="!processing" class="w-5 h-5" />
+            <span v-else class="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
+            {{ processing ? 'Procesando...' : 'Proceder al Pago' }}
          </button>
       </div>
     </div>
@@ -43,22 +43,27 @@
     <div class="flex flex-col md:flex-row gap-4 justify-between items-end md:items-center">
        <!-- Tabs -->
        <div class="bg-white p-1 rounded-xl border border-slate-200 inline-flex shadow-sm">
-          <button 
-             @click="activeTab = 'approval'"
-             class="px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2"
-             :class="activeTab === 'approval' ? 'bg-indigo-50 text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'"
-          >
-             <BanknotesIcon class="w-4 h-4" />
-             Por Pagar
-          </button>
+          <!-- STEP 1: Printing -->
           <button 
              @click="activeTab = 'printing'"
              class="px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2"
              :class="activeTab === 'printing' ? 'bg-indigo-50 text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'"
           >
-             <DocumentDuplicateIcon class="w-4 h-4" />
-             Impresión / Archivo
+             <PrinterIcon class="w-4 h-4" />
+             1. Por Imprimir
           </button>
+          
+          <!-- STEP 2: Payment -->
+          <button 
+             @click="activeTab = 'payment'"
+             class="px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2"
+             :class="activeTab === 'payment' ? 'bg-indigo-50 text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+          >
+             <BanknotesIcon class="w-4 h-4" />
+             2. Por Pagar
+          </button>
+
+          <!-- History -->
           <button 
              @click="activeTab = 'history'"
              class="px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2"
@@ -93,9 +98,9 @@
     <div class="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
        <div class="p-4 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
           <h3 class="font-bold text-slate-700 flex items-center gap-2">
-             <span v-if="activeTab === 'approval'">Solicitudes Aprobadas (Pendientes de Pago)</span>
-             <span v-else-if="activeTab === 'printing'">Pagadas (Pendientes de Archivo Físico)</span>
-             <span v-else>Historial Completo</span>
+             <span v-if="activeTab === 'printing'">Pendientes de Impresión y Archivo</span>
+             <span v-else-if="activeTab === 'payment'">Archivados y Listos para Pago</span>
+             <span v-else>Historial de Pagos Realizados</span>
           </h3>
           <button @click="toggleSelectAll" class="text-sm font-semibold text-indigo-600 hover:text-indigo-800">
              {{ allSelected ? 'Deseleccionar todo' : 'Seleccionar todo' }}
@@ -116,7 +121,6 @@
                 <th class="px-6 py-4 text-xs font-bold text-slate-500 uppercase">Tipo</th>
                 <th class="px-6 py-4 text-xs font-bold text-slate-500 uppercase">Estado</th>
                 <th class="px-6 py-4 text-xs font-bold text-slate-500 uppercase text-right">Total</th>
-                <th class="px-6 py-4 text-xs font-bold text-slate-500 uppercase text-right" v-if="activeTab==='approval'">Acciones</th>
              </tr>
           </thead>
           <tbody class="divide-y divide-slate-100">
@@ -144,29 +148,70 @@
                    </span>
                 </td>
                 <td class="px-6 py-4">
-                   <span class="px-2 py-1 rounded text-xs font-bold" :class="getStatusClass(item.raw_status)">
-                      {{ getStatusLabel(item.raw_status) }}
+                   <span class="px-2 py-1 rounded text-xs font-bold" :class="getStatusClass(item.raw_status, item.archived_at)">
+                      {{ getStatusLabel(item.raw_status, item.archived_at) }}
                    </span>
-                   <div v-if="activeTab==='history' && item.archived_at" class="text-[10px] text-slate-400 mt-1">
-                      Archivado: {{ fmtDate(item.archived_at) }}
+                   <div v-if="activeTab==='history' && item.payment_method" class="text-[10px] text-slate-500 mt-1 font-mono">
+                      {{ item.payment_method }} 
+                      <span v-if="item.payment_ref">| Ref: {{ item.payment_ref }}</span>
                    </div>
                 </td>
                 <td class="px-6 py-4 text-right font-mono font-bold text-slate-700">
                    {{ fmtMoney(item.total) }}
                 </td>
-                <td class="px-6 py-4 text-right" v-if="activeTab==='approval'">
-                   <button @click.stop="processSingle(item)" class="text-emerald-600 hover:text-emerald-800 font-bold text-xs bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded transition">
-                      Pagar Indiv.
-                   </button>
-                </td>
              </tr>
              <tr v-if="items.length === 0">
-                <td colspan="7" class="p-8 text-center text-slate-400">
-                   No se encontraron registros.
+                <td colspan="6" class="p-8 text-center text-slate-400">
+                   No se encontraron registros en esta bandeja.
                 </td>
              </tr>
           </tbody>
        </table>
+    </div>
+
+    <!-- PAYMENT MODAL -->
+    <div v-if="showPaymentModal" class="fixed inset-0 z-50 flex items-center justify-center p-4">
+       <div class="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" @click="showPaymentModal = false"></div>
+       <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md relative z-10 overflow-hidden p-6 animate-fade-in-up">
+          <h3 class="text-xl font-bold text-slate-900 mb-2">Confirmar Pago</h3>
+          <p class="text-slate-500 text-sm mb-6">
+             Se marcarán <strong>{{ selectedIds.length }}</strong> solicitudes como pagadas.
+             Por favor, indica si se generó un cheque físico.
+          </p>
+          
+          <div class="space-y-3 mb-6">
+             <button 
+                @click="paymentMethod = 'CHEQUE'" 
+                class="w-full p-4 rounded-xl border-2 transition flex items-center justify-between"
+                :class="paymentMethod === 'CHEQUE' ? 'border-indigo-600 bg-indigo-50' : 'border-slate-200 hover:border-slate-300'"
+             >
+                <div class="font-bold text-slate-800">CHEQUE</div>
+                <CheckCircleIcon v-if="paymentMethod === 'CHEQUE'" class="w-6 h-6 text-indigo-600" />
+             </button>
+
+             <button 
+                @click="paymentMethod = 'NO CHEQUE'" 
+                class="w-full p-4 rounded-xl border-2 transition flex items-center justify-between"
+                :class="paymentMethod === 'NO CHEQUE' ? 'border-emerald-600 bg-emerald-50' : 'border-slate-200 hover:border-slate-300'"
+             >
+                <div class="text-left">
+                   <div class="font-bold text-slate-800">NO CHEQUE</div>
+                   <div class="text-xs text-slate-500">Transferencia / Efectivo</div>
+                </div>
+                <CheckCircleIcon v-if="paymentMethod === 'NO CHEQUE'" class="w-6 h-6 text-emerald-600" />
+             </button>
+          </div>
+
+          <div class="mb-6">
+             <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Referencia (Opcional)</label>
+             <input v-model="paymentRefInput" placeholder="Num. Cheque o Rastreo" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500" />
+          </div>
+
+          <div class="flex gap-3">
+             <button @click="showPaymentModal = false" class="flex-1 py-3 text-slate-600 font-bold hover:bg-slate-100 rounded-xl transition">Cancelar</button>
+             <button @click="executePayment" class="flex-1 py-3 bg-slate-900 text-white font-bold rounded-xl hover:bg-slate-800 transition shadow-lg">Confirmar</button>
+          </div>
+       </div>
     </div>
   </div>
 </template>
@@ -174,16 +219,21 @@
 <script setup lang="ts">
 import { 
    PrinterIcon, ArchiveBoxIcon, CheckIcon, MagnifyingGlassIcon, 
-   DocumentDuplicateIcon, CurrencyDollarIcon, BanknotesIcon 
+   CurrencyDollarIcon, BanknotesIcon, CheckCircleIcon 
 } from '@heroicons/vue/24/outline';
 
 const items = ref<any[]>([]);
-const selectedIds = ref<string[]>([]);
+const selectedIds = ref<string[]>([])
 const loading = ref(true);
 const processing = ref(false);
 
+// Modal State
+const showPaymentModal = ref(false);
+const paymentMethod = ref<'CHEQUE' | 'NO CHEQUE'>('NO CHEQUE');
+const paymentRefInput = ref('');
+
 // Filters
-const activeTab = ref<'approval' | 'printing' | 'history'>('approval');
+const activeTab = ref<'printing' | 'payment' | 'history'>('printing');
 const selectedMonth = ref(new Date().toISOString().slice(0, 7)); // Current month YYYY-MM
 const searchQuery = ref('');
 
@@ -191,13 +241,15 @@ const searchQuery = ref('');
 const fmtDate = (d: string) => new Date(d).toLocaleDateString('es-MX');
 const fmtMoney = (n: number) => `$${Number(n).toLocaleString('es-MX', { minimumFractionDigits: 2 })}`;
 
-const getStatusClass = (s: string) => {
-   if (s === 'APPROVED') return 'bg-indigo-100 text-indigo-800';
+const getStatusClass = (s: string, archivedAt: string) => {
+   if (s === 'APPROVED' && !archivedAt) return 'bg-amber-100 text-amber-800'; // Waiting Print
+   if (s === 'APPROVED' && archivedAt) return 'bg-indigo-100 text-indigo-800'; // Ready to Pay
    if (s === 'PROCESSED') return 'bg-emerald-100 text-emerald-800';
    return 'bg-slate-100 text-slate-800';
 }
-const getStatusLabel = (s: string) => {
-   if (s === 'APPROVED') return 'POR PAGAR';
+const getStatusLabel = (s: string, archivedAt: string) => {
+   if (s === 'APPROVED' && !archivedAt) return 'POR IMPRIMIR';
+   if (s === 'APPROVED' && archivedAt) return 'POR PAGAR';
    if (s === 'PROCESSED') return 'PAGADO';
    return s;
 }
@@ -211,15 +263,21 @@ const refresh = async () => {
          month: selectedMonth.value
       };
 
-      // Map tabs to statuses
-      if (activeTab.value === 'approval') {
+      // --- LOGIC FOR TABS ---
+      // 1. Printing: APPROVED but NOT ARCHIVED
+      if (activeTab.value === 'printing') {
          params.status = 'APPROVED';
-      } else if (activeTab.value === 'printing') {
-         params.status = 'PROCESSED';
          params.archived = 'false';
-      } else if (activeTab.value === 'history') {
-         params.status = 'PROCESSED';
+      } 
+      // 2. Payment: APPROVED AND ARCHIVED (Printed)
+      else if (activeTab.value === 'payment') {
+         params.status = 'APPROVED';
          params.archived = 'true';
+      } 
+      // 3. History: PROCESSED
+      else if (activeTab.value === 'history') {
+         params.status = 'PROCESSED';
+         // Show all processed, regardless of archive time (though logically all processed should be archived)
       }
 
       const res = await $fetch<any>('/api/reimbursements', { params });
@@ -246,43 +304,7 @@ const toggleSelectAll = () => {
    else selectedIds.value = items.value.map(x => x.id);
 };
 
-// Action: Batch Payment
-const confirmBatchProcess = async () => {
-   if (!selectedIds.value.length) return;
-   if (!confirm(`¿Confirmas el pago de ${selectedIds.value.length} solicitudes?`)) return;
-
-   processing.value = true;
-   try {
-      // Prompt for reference optionally
-      const ref = prompt('Referencia de pago / Lote (Opcional):') || '';
-      
-      await $fetch('/api/reimbursements/batch', { 
-         method: 'POST', 
-         body: { action: 'process', ids: selectedIds.value, paymentRef: ref } 
-      });
-      await refresh();
-   } catch (e: any) {
-      alert('Error: ' + e.message);
-   } finally {
-      processing.value = false;
-   }
-};
-
-// Action: Single Payment
-const processSingle = async (item: any) => {
-   if (!confirm(`¿Marcar como pagado: ${item.folio}?`)) return;
-   try {
-      await $fetch('/api/reimbursements/action', { 
-         method: 'POST', 
-         body: { id: item.id, action: 'PROCESS' } 
-      });
-      await refresh();
-   } catch (e: any) {
-      alert('Error: ' + e.message);
-   }
-};
-
-// Action: Print & Archive
+// --- ACTION: PRINT ---
 const printBatch = async () => {
    if (!selectedIds.value.length) return;
    processing.value = true;
@@ -294,20 +316,53 @@ const printBatch = async () => {
          responseType: 'blob' 
       });
 
+      // Download PDF
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.setAttribute('download', `CajaSmart_Batch_${new Date().toISOString().slice(0, 10)}.pdf`);
+      link.setAttribute('download', `CajaSmart_Lote_${new Date().toISOString().slice(0, 10)}.pdf`);
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
       window.URL.revokeObjectURL(url);
       
+      // If we were in printing tab, items should move to payment tab now.
       if(activeTab.value === 'printing') {
          setTimeout(() => refresh(), 1000);
       }
    } catch (e: any) {
       alert('Error al generar PDF: ' + (e.message || 'Desconocido'));
+   } finally {
+      processing.value = false;
+   }
+};
+
+// --- ACTION: OPEN PAYMENT MODAL ---
+const openPaymentModal = () => {
+   if (!selectedIds.value.length) return;
+   paymentMethod.value = 'NO CHEQUE'; // Default
+   paymentRefInput.value = '';
+   showPaymentModal.value = true;
+}
+
+// --- ACTION: EXECUTE PAYMENT ---
+const executePayment = async () => {
+   processing.value = true;
+   showPaymentModal.value = false;
+   
+   try {
+      await $fetch('/api/reimbursements/batch', { 
+         method: 'POST', 
+         body: { 
+            action: 'process', 
+            ids: selectedIds.value, 
+            paymentRef: paymentRefInput.value,
+            paymentMethod: paymentMethod.value 
+         } 
+      });
+      await refresh();
+   } catch (e: any) {
+      alert('Error al procesar pago: ' + e.message);
    } finally {
       processing.value = false;
    }
@@ -320,8 +375,15 @@ onMounted(refresh);
 .animate-fade-in {
    animation: fadeIn 0.3s ease-out;
 }
+.animate-fade-in-up {
+   animation: fadeInUp 0.3s ease-out;
+}
 @keyframes fadeIn {
    from { opacity: 0; transform: translateY(-5px); }
    to { opacity: 1; transform: translateY(0); }
+}
+@keyframes fadeInUp {
+   from { opacity: 0; transform: scale(0.95); }
+   to { opacity: 1; transform: scale(1); }
 }
 </style>

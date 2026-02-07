@@ -22,6 +22,8 @@ export default defineEventHandler(async (event) => {
   const estadoFilter = String(q.estado || '').trim();
   const statusFilter = String(q.status || '').trim();
   const monthFilter = String(q.month || '').trim(); 
+  
+  // 'true' = archived items, 'false' = unarchived items, undefined = all
   const archivedFilter = q.archived; 
 
   const db = await useDb();
@@ -29,7 +31,7 @@ export default defineEventHandler(async (event) => {
   let sql = `
     SELECT 
       r.id, r.status, r.reimbursement_date, r.total_amount, r.rejection_reason, 
-      r.created_at, r.archived_at, r.is_deducible,
+      r.created_at, r.archived_at, r.is_deducible, r.payment_method, r.payment_ref,
       u.nombre as solicitante_nombre,
       p.nombre as plantel_nombre
     FROM reimbursements r
@@ -42,14 +44,12 @@ export default defineEventHandler(async (event) => {
 
   // 1. Role Scoping & Multi-Plantel Logic
   if (user.role_name === 'SUPER_ADMIN') {
-    // Super Admin sees everything, no filter needed
+    // Super Admin sees everything
   } else if (user.role_name === 'ADMIN_PLANTEL') {
-    // ADMIN_PLANTEL only sees their own requests
     conditions.push('r.user_id = ?');
     params.push(user.id);
   } else {
-    // Reviewers (OPS, FISCAL, TESORERIA, RH) see requests from their assigned planteles
-    // Uses the new user_planteles table
+    // Reviewers see requests from their assigned planteles
     conditions.push(`
       r.plantel_id IN (
         SELECT plantel_id FROM user_planteles WHERE user_id = ?
@@ -74,10 +74,12 @@ export default defineEventHandler(async (event) => {
   }
 
   if (monthFilter) {
+    // Filter by reimbursement_date (accounting date)
     conditions.push("DATE_FORMAT(r.reimbursement_date, '%Y-%m') = ?");
     params.push(monthFilter);
   }
 
+  // 4. Archive Filter
   if (archivedFilter === 'true') {
     conditions.push('r.archived_at IS NOT NULL');
   } else if (archivedFilter === 'false') {
@@ -143,6 +145,8 @@ export default defineEventHandler(async (event) => {
       is_deducible: !!r.is_deducible,
       notas: r.rejection_reason || null,
       archived_at: r.archived_at,
+      payment_method: r.payment_method, // New field
+      payment_ref: r.payment_ref,
       file_url: finalFileUrl, 
       db_file_url: dbFileUrl, 
       conceptos: myItems.map((i: any) => ({

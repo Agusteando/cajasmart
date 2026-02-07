@@ -3,9 +3,12 @@ import { requireAuth, requireRole } from '~/server/utils/auth';
 import { createAuditLog } from '~/server/utils/audit';
 
 export default defineEventHandler(async (event) => {
+  // Only Treasury or Super Admin can do batch operations here
   const user = requireRole(event, ['TESORERIA', 'SUPER_ADMIN']);
   const body = await readBody(event);
-  const { action, ids, paymentRef } = body; // action: 'print' | 'process'
+  
+  // action: 'print' (handled in pdf-batch usually, but maybe for data dump) or 'process'
+  const { action, ids, paymentRef, paymentMethod } = body; 
 
   if (!Array.isArray(ids) || ids.length === 0) {
     throw createError({ statusCode: 400, statusMessage: 'No items selected' });
@@ -13,45 +16,32 @@ export default defineEventHandler(async (event) => {
 
   const db = await useDb();
 
-  // Fetch details for both actions
-  // Need placeholder string for IN clause
+  // Validate items exist
   const placeholders = ids.map(() => '?').join(',');
   const [rows]: any = await db.execute(
-    `SELECT r.*, p.codigo as plantelCodigo, p.nombre as plantelNombre
-     FROM reimbursements r
-     JOIN planteles p ON r.plantel_id = p.id
-     WHERE r.id IN (${placeholders})`,
+    `SELECT r.* FROM reimbursements r WHERE r.id IN (${placeholders})`,
     ids
   );
 
-  if (action === 'print') {
-    // Return data structured for the print view
-    const totalAmount = rows.reduce((sum: number, r: any) => sum + parseFloat(r.amount), 0);
-    return {
-      success: true,
-      data: {
-        generatedBy: user.nombre,
-        totalItems: rows.length,
-        totalAmount: totalAmount.toFixed(2),
-        items: rows.map((r: any) => ({
-          id: r.id,
-          invoiceNumber: r.invoice_number,
-          provider: r.provider,
-          concept: r.concept,
-          amount: parseFloat(r.amount).toFixed(2),
-          plantelCodigo: r.plantelCodigo
-        }))
-      }
-    };
-  }
-
   if (action === 'process') {
-    // Update all to PROCESSED
+    // Validate that items are APPROVED and ARCHIVED (Printed) before paying?
+    // The UI handles the flow, but backend should ideally check.
+    // For now, we allow processing if status is APPROVED.
+    
+    // VALIDATE paymentMethod
+    if (paymentMethod !== 'CHEQUE' && paymentMethod !== 'NO CHEQUE') {
+      throw createError({ statusCode: 400, statusMessage: 'Método de pago inválido (CHEQUE/NO CHEQUE)' });
+    }
+
     await db.execute(
       `UPDATE reimbursements 
-       SET status = 'PROCESSED', processed_at = NOW(), processed_by = ?, payment_ref = ?
+       SET status = 'PROCESSED', 
+           processed_at = NOW(), 
+           processed_by = ?, 
+           payment_ref = ?,
+           payment_method = ?
        WHERE id IN (${placeholders}) AND status = 'APPROVED'`,
-      [user.id, paymentRef || null, ...ids]
+      [user.id, paymentRef || null, paymentMethod, ...ids]
     );
 
     // Audit logs for batch
@@ -63,7 +53,7 @@ export default defineEventHandler(async (event) => {
         fromStatus: 'APPROVED',
         toStatus: 'PROCESSED',
         actorUserId: user.id,
-        comment: `Lote ref: ${paymentRef || 'N/A'}`
+        comment: `Lote ref: ${paymentRef || 'N/A'}, Metodo: ${paymentMethod}`
       });
     }
 
