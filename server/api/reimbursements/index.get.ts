@@ -10,6 +10,7 @@ function mapStatus(s: string): string {
     case 'RETURNED': return 'rechazado';
     case 'APPROVED': return 'aprobado';
     case 'PROCESSED': return 'pagado';
+    case 'RECEIVED': return 'finalizado'; // NEW
     default: return 'borrador';
   }
 }
@@ -22,8 +23,6 @@ export default defineEventHandler(async (event) => {
   const estadoFilter = String(q.estado || '').trim();
   const statusFilter = String(q.status || '').trim();
   const monthFilter = String(q.month || '').trim(); 
-  
-  // 'true' = archived items, 'false' = unarchived items, undefined = all
   const archivedFilter = q.archived; 
 
   const db = await useDb();
@@ -42,14 +41,11 @@ export default defineEventHandler(async (event) => {
   const conditions: string[] = [];
   const params: any[] = [];
 
-  // 1. Role Scoping & Multi-Plantel Logic
   if (user.role_name === 'SUPER_ADMIN') {
-    // Super Admin sees everything
   } else if (user.role_name === 'ADMIN_PLANTEL') {
     conditions.push('r.user_id = ?');
     params.push(user.id);
   } else {
-    // Reviewers see requests from their assigned planteles
     conditions.push(`
       r.plantel_id IN (
         SELECT plantel_id FROM user_planteles WHERE user_id = ?
@@ -58,28 +54,25 @@ export default defineEventHandler(async (event) => {
     params.push(user.id);
   }
 
-  // 2. Status Mapping Filter
   if (estadoFilter) {
     if (estadoFilter === 'borrador') conditions.push("r.status = 'DRAFT'");
     else if (estadoFilter === 'en_revision') conditions.push("r.status IN ('PENDING_OPS_REVIEW', 'PENDING_FISCAL_REVIEW')");
     else if (estadoFilter === 'aprobado') conditions.push("r.status = 'APPROVED'");
     else if (estadoFilter === 'rechazado') conditions.push("r.status = 'RETURNED'");
     else if (estadoFilter === 'pagado') conditions.push("r.status = 'PROCESSED'");
+    else if (estadoFilter === 'finalizado') conditions.push("r.status = 'RECEIVED'");
   }
 
-  // 3. Exact Status Filter
   if (statusFilter) {
     conditions.push('r.status = ?');
     params.push(statusFilter);
   }
 
   if (monthFilter) {
-    // Filter by reimbursement_date (accounting date)
     conditions.push("DATE_FORMAT(r.reimbursement_date, '%Y-%m') = ?");
     params.push(monthFilter);
   }
 
-  // 4. Archive Filter
   if (archivedFilter === 'true') {
     conditions.push('r.archived_at IS NOT NULL');
   } else if (archivedFilter === 'false') {
@@ -97,7 +90,6 @@ export default defineEventHandler(async (event) => {
   }
 
   if (conditions.length) sql += ' WHERE ' + conditions.join(' AND ');
-  
   sql += ' ORDER BY r.reimbursement_date DESC, r.created_at DESC LIMIT 300';
 
   const [rows]: any = await db.execute(sql, params);
@@ -145,7 +137,7 @@ export default defineEventHandler(async (event) => {
       is_deducible: !!r.is_deducible,
       notas: r.rejection_reason || null,
       archived_at: r.archived_at,
-      payment_method: r.payment_method, // New field
+      payment_method: r.payment_method, 
       payment_ref: r.payment_ref,
       file_url: finalFileUrl, 
       db_file_url: dbFileUrl, 

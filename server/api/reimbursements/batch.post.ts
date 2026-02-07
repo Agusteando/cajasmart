@@ -3,12 +3,9 @@ import { requireAuth, requireRole } from '~/server/utils/auth';
 import { createAuditLog } from '~/server/utils/audit';
 
 export default defineEventHandler(async (event) => {
-  // Only Treasury or Super Admin can do batch operations here
   const user = requireRole(event, ['TESORERIA', 'SUPER_ADMIN']);
   const body = await readBody(event);
-  
-  // action: 'print' (handled in pdf-batch usually, but maybe for data dump) or 'process'
-  const { action, ids, paymentRef, paymentMethod } = body; 
+  const { action, ids, paymentRef } = body; // action: 'process'
 
   if (!Array.isArray(ids) || ids.length === 0) {
     throw createError({ statusCode: 400, statusMessage: 'No items selected' });
@@ -16,48 +13,54 @@ export default defineEventHandler(async (event) => {
 
   const db = await useDb();
 
-  // Validate items exist
   const placeholders = ids.map(() => '?').join(',');
-  const [rows]: any = await db.execute(
-    `SELECT r.* FROM reimbursements r WHERE r.id IN (${placeholders})`,
-    ids
-  );
-
+  
   if (action === 'process') {
-    // Validate that items are APPROVED and ARCHIVED (Printed) before paying?
-    // The UI handles the flow, but backend should ideally check.
-    // For now, we allow processing if status is APPROVED.
-    
-    // VALIDATE paymentMethod
-    if (paymentMethod !== 'CHEQUE' && paymentMethod !== 'NO CHEQUE') {
-      throw createError({ statusCode: 400, statusMessage: 'Método de pago inválido (CHEQUE/NO CHEQUE)' });
-    }
-
-    await db.execute(
-      `UPDATE reimbursements 
-       SET status = 'PROCESSED', 
-           processed_at = NOW(), 
-           processed_by = ?, 
-           payment_ref = ?,
-           payment_method = ?
-       WHERE id IN (${placeholders}) AND status = 'APPROVED'`,
-      [user.id, paymentRef || null, paymentMethod, ...ids]
+    // 1. Fetch info to determine Payment Method per item
+    const [rows]: any = await db.execute(
+        `SELECT id, is_deducible FROM reimbursements WHERE id IN (${placeholders})`,
+        ids
     );
 
-    // Audit logs for batch
-    for (const id of ids) {
-      await createAuditLog({
-        entityType: 'reimbursement',
-        entityId: id,
-        action: 'BATCH_PROCESS',
-        fromStatus: 'APPROVED',
-        toStatus: 'PROCESSED',
-        actorUserId: user.id,
-        comment: `Lote ref: ${paymentRef || 'N/A'}, Metodo: ${paymentMethod}`
-      });
+    // 2. Process each
+    const connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    try {
+        for(const r of rows) {
+            // AUTO-INFER: No Deducible = NO CHEQUE, Deducible = CHEQUE
+            const method = r.is_deducible ? 'CHEQUE' : 'NO CHEQUE';
+            
+            await connection.execute(
+                `UPDATE reimbursements 
+                 SET status = 'PROCESSED', 
+                     processed_at = NOW(), 
+                     processed_by = ?, 
+                     payment_ref = ?,
+                     payment_method = ?
+                 WHERE id = ? AND status = 'APPROVED'`,
+                [user.id, paymentRef || null, method, r.id]
+            );
+            
+            await createAuditLog({
+                entityType: 'reimbursement',
+                entityId: r.id,
+                action: 'BATCH_PROCESS',
+                fromStatus: 'APPROVED',
+                toStatus: 'PROCESSED',
+                actorUserId: user.id,
+                comment: `Batch Pay. Method: ${method}`
+            });
+        }
+        await connection.commit();
+    } catch(e) {
+        await connection.rollback();
+        throw e;
+    } finally {
+        connection.release();
     }
 
-    return { success: true, message: 'Procesado correctamente' };
+    return { success: true, message: 'Pagos procesados correctamente' };
   }
 
   throw createError({ statusCode: 400, statusMessage: 'Acción desconocida' });

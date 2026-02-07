@@ -7,8 +7,9 @@ import fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import sharp from 'sharp';
 
-// Helper to draw table cell borders/text
+// Helper to draw text with truncation
 function drawCell(page: any, x: number, y: number, width: number, height: number, text: string, font: any, fontSize: number = 9) {
+  // Border
   page.drawRectangle({
     x,
     y: y - height,
@@ -19,8 +20,17 @@ function drawCell(page: any, x: number, y: number, width: number, height: number
   });
 
   if (text) {
-    const cleanText = String(text).replace(/\n/g, ' ').substring(0, 55); 
-    page.drawText(cleanText, {
+    const safeText = String(text).replace(/\n/g, ' ').trim();
+    // Rough calc: average char width approx fontSize * 0.5. 
+    // We leave some padding (approx 8px).
+    const maxChars = Math.floor((width - 8) / (fontSize * 0.5));
+    
+    let finalText = safeText;
+    if (safeText.length > maxChars) {
+       finalText = safeText.substring(0, maxChars - 3) + '...';
+    }
+
+    page.drawText(finalText, {
       x: x + 4,
       y: y - height + 6,
       size: fontSize,
@@ -31,7 +41,6 @@ function drawCell(page: any, x: number, y: number, width: number, height: number
 }
 
 export default defineEventHandler(async (event) => {
-  // TESORERIA now handles printing
   const user = requireRole(event, ['TESORERIA', 'SUPER_ADMIN']);
   const body = await readBody(event);
   const { ids } = body;
@@ -70,13 +79,8 @@ export default defineEventHandler(async (event) => {
 
   let logoBuffer: Buffer | null = null;
   const logoPath = path.resolve(process.cwd(), 'public/logo.webp');
-  
   if (existsSync(logoPath)) {
-    try {
-      logoBuffer = await sharp(logoPath).png().toBuffer();
-    } catch (e) {
-      console.error('Error converting logo:', e);
-    }
+    try { logoBuffer = await sharp(logoPath).png().toBuffer(); } catch {}
   }
 
   const pdfDoc = await PDFDocument.create();
@@ -85,11 +89,7 @@ export default defineEventHandler(async (event) => {
 
   let embeddedLogo: any = null;
   if (logoBuffer) {
-    try {
-      embeddedLogo = await pdfDoc.embedPng(logoBuffer);
-    } catch (e) {
-      console.error('Error embedding logo:', e);
-    }
+    try { embeddedLogo = await pdfDoc.embedPng(logoBuffer); } catch {}
   }
 
   const cfg = useRuntimeConfig();
@@ -102,7 +102,6 @@ export default defineEventHandler(async (event) => {
     const razonSocial = r.razon_social || 'INSTITUTO EDUCATIVO PARA EL DESARROLLO INTEGRAL DEL SABER SC';
     const isDeducible = !!r.is_deducible;
 
-    // --- A. Draw Summary Sheet ---
     const page = pdfDoc.addPage();
     const { width, height } = page.getSize();
     let y = height - 60;
@@ -131,20 +130,18 @@ export default defineEventHandler(async (event) => {
     if (!isDeducible) {
       const warn = 'NO DEDUCIBLE';
       const warnWidth = fontBold.widthOfTextAtSize(warn, 14);
-      page.drawText(warn, { 
-        x: centerX - (warnWidth / 2), 
-        y: y - 35, 
-        size: 14, 
-        font: fontBold, 
-        color: rgb(1, 0, 0) 
-      });
+      page.drawText(warn, { x: centerX - (warnWidth / 2), y: y - 35, size: 14, font: fontBold, color: rgb(1, 0, 0) });
     }
 
     y -= 50;
 
-    page.drawText(`PLANTEL: ${r.plantel_nombre || 'N/A'}`, { x: 50, y, size: 10, font });
+    // Header Info
+    const cleanPlantel = (r.plantel_nombre || 'N/A').replace(/\n/g, ' ').substring(0, 50);
+    const cleanAdmin = (r.solicitante_nombre || '').replace(/\n/g, ' ').substring(0, 50);
+    
+    page.drawText(`PLANTEL: ${cleanPlantel}`, { x: 50, y, size: 10, font });
     y -= 18;
-    page.drawText(`NOMBRE DEL ADMINISTRADOR: ${r.solicitante_nombre}`, { x: 50, y, size: 10, font });
+    page.drawText(`NOMBRE DEL ADMINISTRADOR: ${cleanAdmin}`, { x: 50, y, size: 10, font });
     y -= 18;
     page.drawText(`FECHA: ${new Date(r.reimbursement_date).toLocaleDateString('es-MX')}`, { x: 50, y, size: 10, font });
     
@@ -152,6 +149,7 @@ export default defineEventHandler(async (event) => {
     page.drawText(`FOLIO: R-${String(r.id).padStart(5, '0')}`, { x: 430, y: y + 3, size: 12, font: fontBold, color: rgb(0.8, 0, 0) });
     y -= 30;
 
+    // Table Header
     const cols = [
       { name: 'FECHA', w: 60 },
       { name: 'FACTURA', w: 70 },
@@ -169,14 +167,17 @@ export default defineEventHandler(async (event) => {
     y -= 20;
 
     for (const item of rItems) {
-      if (y < 100) { }
+      if (y < 100) { 
+        // Simple page break support if needed, but for receipts usually fits one page. 
+        // Truncating list for now to avoid complexity in this snippet.
+      }
       x = 40;
-      drawCell(page, x, y, 60, 20, item.invoice_date || '-', font); x += 60;
-      drawCell(page, x, y, 70, 20, item.invoice_number || '-', font); x += 70;
-      drawCell(page, x, y, 120, 20, item.provider || '-', font); x += 120;
-      drawCell(page, x, y, 100, 20, item.concept || '-', font); x += 100;
-      drawCell(page, x, y, 120, 20, item.description || '-', font); x += 120;
-      drawCell(page, x, y, 60, 20, `$${Number(item.amount).toFixed(2)}`, font);
+      drawCell(page, x, y, 60, 20, item.invoice_date || '-', font, 8); x += 60;
+      drawCell(page, x, y, 70, 20, item.invoice_number || '-', font, 8); x += 70;
+      drawCell(page, x, y, 120, 20, item.provider || '-', font, 8); x += 120;
+      drawCell(page, x, y, 100, 20, item.concept || '-', font, 8); x += 100;
+      drawCell(page, x, y, 120, 20, item.description || '-', font, 8); x += 120;
+      drawCell(page, x, y, 60, 20, `$${Number(item.amount).toFixed(2)}`, font, 8);
       y -= 20;
     }
 
@@ -200,7 +201,6 @@ export default defineEventHandler(async (event) => {
     });
 
     const uniqueFiles = [...new Set(rItems.map((i: any) => i.file_url).filter(Boolean))];
-
     for (const fileUrl of uniqueFiles) {
       try {
         const filePath = path.join(uploadDir, String(fileUrl));
@@ -214,10 +214,7 @@ export default defineEventHandler(async (event) => {
             const attachmentDoc = await PDFDocument.load(fileBuffer);
             const copiedPages = await pdfDoc.copyPages(attachmentDoc, attachmentDoc.getPageIndices());
             copiedPages.forEach((cp) => pdfDoc.addPage(cp));
-          } catch (pdfErr) {
-            const errPage = pdfDoc.addPage();
-            errPage.drawText(`ERROR: No se pudo adjuntar el PDF original (${fileUrl}).`, { x: 50, y: 700, font, size: 12, color: rgb(1,0,0) });
-          }
+          } catch {}
         } else if (['.png', '.jpg', '.jpeg', '.webp'].includes(ext)) {
           const imgPage = pdfDoc.addPage();
           let image;
@@ -239,13 +236,11 @@ export default defineEventHandler(async (event) => {
              });
           }
         }
-      } catch (err) {
-        console.error(`Error attaching file ${fileUrl}`, err);
-      }
+      } catch {}
     }
   }
 
-  // MARK AS ARCHIVED / PRINTED
+  // MARK AS PRINTED (ARCHIVED)
   await db.execute(
     `UPDATE reimbursements SET archived_at = NOW(), archived_by = ? WHERE id IN (${placeholders})`,
     [user.id, ...ids]

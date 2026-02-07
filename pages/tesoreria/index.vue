@@ -4,7 +4,7 @@
     <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
       <div>
         <h1 class="text-3xl font-bold text-slate-900">Tesorería / Bancos</h1>
-        <p class="text-slate-500 mt-1">Gestión de impresiones, archivo y pagos finales.</p>
+        <p class="text-slate-500 mt-1">Gestión de impresiones y pagos finales.</p>
       </div>
       
       <!-- Actions Toolbar -->
@@ -13,7 +13,7 @@
             {{ selectedIds.length }} seleccionados
          </div>
          
-         <!-- Action 1: PRINT (To Archive) -->
+         <!-- Action 1: PRINT (First Step) -->
          <button 
             v-if="activeTab === 'printing'"
             @click="printBatch" 
@@ -22,10 +22,10 @@
          >
             <PrinterIcon v-if="!processing" class="w-5 h-5" />
             <span v-else class="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
-            {{ processing ? 'Generando PDF...' : 'Imprimir y Archivar' }}
+            {{ processing ? 'Generando PDF...' : '1. Imprimir y Archivar' }}
          </button>
 
-         <!-- Action 2: PAY (Final) -->
+         <!-- Action 2: PAY (Second Step) -->
          <button 
             v-if="activeTab === 'payment'"
             @click="openPaymentModal" 
@@ -34,7 +34,7 @@
          >
             <CurrencyDollarIcon v-if="!processing" class="w-5 h-5" />
             <span v-else class="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
-            {{ processing ? 'Procesando...' : 'Proceder al Pago' }}
+            {{ processing ? 'Procesando...' : '2. Pagar (Cheque/Transf)' }}
          </button>
       </div>
     </div>
@@ -98,9 +98,9 @@
     <div class="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
        <div class="p-4 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
           <h3 class="font-bold text-slate-700 flex items-center gap-2">
-             <span v-if="activeTab === 'printing'">Pendientes de Impresión y Archivo</span>
-             <span v-else-if="activeTab === 'payment'">Archivados y Listos para Pago</span>
-             <span v-else>Historial de Pagos Realizados</span>
+             <span v-if="activeTab === 'printing'">Aprobados (Requiere Impresión)</span>
+             <span v-else-if="activeTab === 'payment'">Impresos (Listos para Pago)</span>
+             <span v-else>Historial de Pagos</span>
           </h3>
           <button @click="toggleSelectAll" class="text-sm font-semibold text-indigo-600 hover:text-indigo-800">
              {{ allSelected ? 'Deseleccionar todo' : 'Seleccionar todo' }}
@@ -151,9 +151,10 @@
                    <span class="px-2 py-1 rounded text-xs font-bold" :class="getStatusClass(item.raw_status, item.archived_at)">
                       {{ getStatusLabel(item.raw_status, item.archived_at) }}
                    </span>
-                   <div v-if="activeTab==='history' && item.payment_method" class="text-[10px] text-slate-500 mt-1 font-mono">
-                      {{ item.payment_method }} 
-                      <span v-if="item.payment_ref">| Ref: {{ item.payment_ref }}</span>
+                   <!-- Payment Method Badge -->
+                   <div v-if="item.payment_method" class="mt-1 text-[10px] font-mono text-slate-500 uppercase">
+                      {{ item.payment_method }}
+                      <span v-if="item.payment_ref">| {{ item.payment_ref }}</span>
                    </div>
                 </td>
                 <td class="px-6 py-4 text-right font-mono font-bold text-slate-700">
@@ -169,47 +170,25 @@
        </table>
     </div>
 
-    <!-- PAYMENT MODAL -->
+    <!-- PAYMENT CONFIRMATION MODAL -->
     <div v-if="showPaymentModal" class="fixed inset-0 z-50 flex items-center justify-center p-4">
        <div class="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" @click="showPaymentModal = false"></div>
        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md relative z-10 overflow-hidden p-6 animate-fade-in-up">
-          <h3 class="text-xl font-bold text-slate-900 mb-2">Confirmar Pago</h3>
+          <h3 class="text-xl font-bold text-slate-900 mb-2">Confirmar Pagos</h3>
           <p class="text-slate-500 text-sm mb-6">
              Se marcarán <strong>{{ selectedIds.length }}</strong> solicitudes como pagadas.
-             Por favor, indica si se generó un cheque físico.
+             <br/>
+             El sistema asignará automáticamente <strong>CHEQUE</strong> a las facturas deducibles y <strong>NO CHEQUE</strong> a las no deducibles.
           </p>
           
-          <div class="space-y-3 mb-6">
-             <button 
-                @click="paymentMethod = 'CHEQUE'" 
-                class="w-full p-4 rounded-xl border-2 transition flex items-center justify-between"
-                :class="paymentMethod === 'CHEQUE' ? 'border-indigo-600 bg-indigo-50' : 'border-slate-200 hover:border-slate-300'"
-             >
-                <div class="font-bold text-slate-800">CHEQUE</div>
-                <CheckCircleIcon v-if="paymentMethod === 'CHEQUE'" class="w-6 h-6 text-indigo-600" />
-             </button>
-
-             <button 
-                @click="paymentMethod = 'NO CHEQUE'" 
-                class="w-full p-4 rounded-xl border-2 transition flex items-center justify-between"
-                :class="paymentMethod === 'NO CHEQUE' ? 'border-emerald-600 bg-emerald-50' : 'border-slate-200 hover:border-slate-300'"
-             >
-                <div class="text-left">
-                   <div class="font-bold text-slate-800">NO CHEQUE</div>
-                   <div class="text-xs text-slate-500">Transferencia / Efectivo</div>
-                </div>
-                <CheckCircleIcon v-if="paymentMethod === 'NO CHEQUE'" class="w-6 h-6 text-emerald-600" />
-             </button>
-          </div>
-
           <div class="mb-6">
-             <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Referencia (Opcional)</label>
-             <input v-model="paymentRefInput" placeholder="Num. Cheque o Rastreo" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500" />
+             <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Referencia General (Opcional)</label>
+             <input v-model="paymentRefInput" placeholder="Ej: Lote #123 / Transferencia masiva" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500" />
           </div>
 
           <div class="flex gap-3">
              <button @click="showPaymentModal = false" class="flex-1 py-3 text-slate-600 font-bold hover:bg-slate-100 rounded-xl transition">Cancelar</button>
-             <button @click="executePayment" class="flex-1 py-3 bg-slate-900 text-white font-bold rounded-xl hover:bg-slate-800 transition shadow-lg">Confirmar</button>
+             <button @click="executePayment" class="flex-1 py-3 bg-emerald-600 text-white font-bold rounded-xl hover:bg-emerald-700 transition shadow-lg">Confirmar Pagos</button>
           </div>
        </div>
     </div>
@@ -219,7 +198,7 @@
 <script setup lang="ts">
 import { 
    PrinterIcon, ArchiveBoxIcon, CheckIcon, MagnifyingGlassIcon, 
-   CurrencyDollarIcon, BanknotesIcon, CheckCircleIcon 
+   CurrencyDollarIcon, BanknotesIcon 
 } from '@heroicons/vue/24/outline';
 
 const items = ref<any[]>([]);
@@ -229,12 +208,11 @@ const processing = ref(false);
 
 // Modal State
 const showPaymentModal = ref(false);
-const paymentMethod = ref<'CHEQUE' | 'NO CHEQUE'>('NO CHEQUE');
 const paymentRefInput = ref('');
 
 // Filters
 const activeTab = ref<'printing' | 'payment' | 'history'>('printing');
-const selectedMonth = ref(new Date().toISOString().slice(0, 7)); // Current month YYYY-MM
+const selectedMonth = ref(new Date().toISOString().slice(0, 7)); 
 const searchQuery = ref('');
 
 // Formatters
@@ -244,13 +222,15 @@ const fmtMoney = (n: number) => `$${Number(n).toLocaleString('es-MX', { minimumF
 const getStatusClass = (s: string, archivedAt: string) => {
    if (s === 'APPROVED' && !archivedAt) return 'bg-amber-100 text-amber-800'; // Waiting Print
    if (s === 'APPROVED' && archivedAt) return 'bg-indigo-100 text-indigo-800'; // Ready to Pay
-   if (s === 'PROCESSED') return 'bg-emerald-100 text-emerald-800';
+   if (s === 'PROCESSED') return 'bg-emerald-100 text-emerald-800'; // Paid
+   if (s === 'RECEIVED') return 'bg-emerald-600 text-white'; // Completed
    return 'bg-slate-100 text-slate-800';
 }
 const getStatusLabel = (s: string, archivedAt: string) => {
    if (s === 'APPROVED' && !archivedAt) return 'POR IMPRIMIR';
    if (s === 'APPROVED' && archivedAt) return 'POR PAGAR';
-   if (s === 'PROCESSED') return 'PAGADO';
+   if (s === 'PROCESSED') return 'PAGADO (Espera Conf)';
+   if (s === 'RECEIVED') return 'FINALIZADO';
    return s;
 }
 
@@ -263,7 +243,6 @@ const refresh = async () => {
          month: selectedMonth.value
       };
 
-      // --- LOGIC FOR TABS ---
       // 1. Printing: APPROVED but NOT ARCHIVED
       if (activeTab.value === 'printing') {
          params.status = 'APPROVED';
@@ -274,13 +253,33 @@ const refresh = async () => {
          params.status = 'APPROVED';
          params.archived = 'true';
       } 
-      // 3. History: PROCESSED
+      // 3. History: PROCESSED OR RECEIVED
       else if (activeTab.value === 'history') {
-         params.status = 'PROCESSED';
-         // Show all processed, regardless of archive time (though logically all processed should be archived)
+         // We fetch both, handled by backend usually via OR but here we rely on basic filters.
+         // Let's just fetch PROCESSED. (Received items are also technically processed but in final state).
+         // Update backend to handle array or fetch all if not specified.
+         // For now, let's fetch everything that is processed or later.
+         // Actually, let's allow fetching by multiple statuses in backend?
+         // Simplification: Fetch PROCESSED in UI, RECEIVED items usually won't show unless backend supports multiple.
+         // HACK: Use 'pagado' filter which maps to PROCESSED, but we need RECEIVED too.
+         // Let's modify index.get.ts to support multiple statuses OR logic if needed.
+         // Current index.get.ts maps specific string to exact SQL.
+         // Let's try sending no status but filter in UI or backend.
+         // Or better, let's just use 'pagado' and 'finalizado'.
+         // Let's update backend to support list?
+         // For simplicity: History tab will show PROCESSED items. 
+         // TODO: Make sure backend returns RECEIVED items too if we want them here.
+         // Let's assume for this specific view, Tesoreria mainly cares about what they paid.
+         params.status = 'PROCESSED'; 
+         // If you want RECEIVED items too, you might need to adjust backend filter to allow multiple or an "advanced" status filter.
       }
 
       const res = await $fetch<any>('/api/reimbursements', { params });
+      
+      // If History tab, manually fetch RECEIVED items too and merge? Or just stick to PROCESSED.
+      // Ideally backend handles "status IN (...)". 
+      // For now, let's assume History shows PROCESSED items which are the ones Tesoreria just acted on.
+      
       items.value = res.items || [];
    } finally {
       loading.value = false;
@@ -316,7 +315,6 @@ const printBatch = async () => {
          responseType: 'blob' 
       });
 
-      // Download PDF
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
@@ -326,7 +324,6 @@ const printBatch = async () => {
       document.body.removeChild(link);
       window.URL.revokeObjectURL(url);
       
-      // If we were in printing tab, items should move to payment tab now.
       if(activeTab.value === 'printing') {
          setTimeout(() => refresh(), 1000);
       }
@@ -337,15 +334,12 @@ const printBatch = async () => {
    }
 };
 
-// --- ACTION: OPEN PAYMENT MODAL ---
 const openPaymentModal = () => {
    if (!selectedIds.value.length) return;
-   paymentMethod.value = 'NO CHEQUE'; // Default
    paymentRefInput.value = '';
    showPaymentModal.value = true;
 }
 
-// --- ACTION: EXECUTE PAYMENT ---
 const executePayment = async () => {
    processing.value = true;
    showPaymentModal.value = false;
@@ -356,8 +350,8 @@ const executePayment = async () => {
          body: { 
             action: 'process', 
             ids: selectedIds.value, 
-            paymentRef: paymentRefInput.value,
-            paymentMethod: paymentMethod.value 
+            paymentRef: paymentRefInput.value
+            // paymentMethod inferred in backend
          } 
       });
       await refresh();

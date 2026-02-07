@@ -5,7 +5,7 @@ import { createNotification, notifyRoleUsers } from '~/server/utils/notification
 
 interface WorkflowAction {
   id: number;
-  action: 'APPROVE' | 'RETURN' | 'PROCESS';
+  action: 'APPROVE' | 'RETURN' | 'PROCESS' | 'CONFIRM_RECEIPT';
   reason?: string;
   paymentRef?: string;
 }
@@ -22,8 +22,11 @@ const VALID_TRANSITIONS: Record<string, Record<string, { requiredRole: string; n
   },
   APPROVED: {
     PROCESS: { requiredRole: 'TESORERIA', nextStatus: 'PROCESSED' },
-    // ADDED: Allow Treasury to return an approved item (e.g. invalid bank info)
     RETURN: { requiredRole: 'TESORERIA', nextStatus: 'RETURNED' }
+  },
+  PROCESSED: {
+    // NEW: Final confirmation by the requester (Admin Plantel)
+    CONFIRM_RECEIPT: { requiredRole: 'ADMIN_PLANTEL', nextStatus: 'RECEIVED' }
   }
 };
 
@@ -34,17 +37,11 @@ export default defineEventHandler(async (event) => {
   const { id, action, reason, paymentRef } = body;
 
   if (!id || !action) {
-    throw createError({
-      statusCode: 400,
-      statusMessage: 'ID y acción son requeridos'
-    });
+    throw createError({ statusCode: 400, statusMessage: 'ID y acción son requeridos' });
   }
 
   if (action === 'RETURN' && !String(reason || '').trim()) {
-    throw createError({
-      statusCode: 400,
-      statusMessage: 'El motivo de devolución es requerido'
-    });
+    throw createError({ statusCode: 400, statusMessage: 'El motivo de devolución es requerido' });
   }
 
   const db = await useDb();
@@ -58,10 +55,7 @@ export default defineEventHandler(async (event) => {
   );
 
   if (!rows.length) {
-    throw createError({
-      statusCode: 404,
-      statusMessage: 'Solicitud no encontrada'
-    });
+    throw createError({ statusCode: 404, statusMessage: 'Solicitud no encontrada' });
   }
 
   const reimbursement = rows[0];
@@ -77,16 +71,25 @@ export default defineEventHandler(async (event) => {
 
   const transition = transitions[action];
 
-  if (user.role_name !== 'SUPER_ADMIN' && user.role_name !== transition.requiredRole) {
-    throw createError({
-      statusCode: 403,
-      statusMessage: `Solo ${transition.requiredRole} puede realizar esta acción`
-    });
+  // Role Check
+  // Special case: CONFIRM_RECEIPT requires user to be the owner (ADMIN_PLANTEL) OR Super Admin
+  if (action === 'CONFIRM_RECEIPT') {
+    if (user.role_name !== 'SUPER_ADMIN') {
+      // Must be the owner
+      if (Number(reimbursement.user_id) !== Number(user.id)) {
+        throw createError({ statusCode: 403, statusMessage: 'Solo el solicitante puede confirmar la recepción' });
+      }
+    }
+  } else {
+    // Standard Role Check
+    if (user.role_name !== 'SUPER_ADMIN' && user.role_name !== transition.requiredRole) {
+      throw createError({ statusCode: 403, statusMessage: `Solo ${transition.requiredRole} puede realizar esta acción` });
+    }
   }
 
   const newStatus = transition.nextStatus;
 
-  // Build update query based on action
+  // Build update query
   let updateFields: string[] = ['status = ?', 'updated_at = NOW()'];
   let updateParams: any[] = [newStatus];
 
@@ -94,11 +97,14 @@ export default defineEventHandler(async (event) => {
     updateFields.push('rejection_reason = ?', 'returned_by = ?');
     updateParams.push(reason, user.id);
   } else if (action === 'PROCESS') {
-    updateFields.push('processed_at = NOW()', 'processed_by = ?', 'payment_ref = ?');
-    updateParams.push(user.id, paymentRef || null);
+    // Auto-infer payment method
+    const isDeducible = !!reimbursement.is_deducible;
+    const paymentMethod = isDeducible ? 'CHEQUE' : 'NO CHEQUE';
+
+    updateFields.push('processed_at = NOW()', 'processed_by = ?', 'payment_ref = ?', 'payment_method = ?');
+    updateParams.push(user.id, paymentRef || null, paymentMethod);
   }
 
-  // Clear rejection info if we are re-approving (unlikely in this flow, but good practice)
   if (action === 'APPROVE') {
     updateFields.push('rejection_reason = NULL', 'returned_by = NULL');
   }
@@ -117,8 +123,8 @@ export default defineEventHandler(async (event) => {
     comment:
       action === 'RETURN'
         ? reason
-        : action === 'PROCESS' && paymentRef
-          ? `Ref: ${paymentRef}`
+        : action === 'PROCESS'
+          ? `Ref: ${paymentRef || 'N/A'}`
           : undefined
   });
 
@@ -141,7 +147,7 @@ export default defineEventHandler(async (event) => {
         await notifyRoleUsers(
           'TESORERIA',
           'APPROVED',
-          'Solicitud lista para pago',
+          'Solicitud lista para impresión y pago',
           `Solicitud #${id} de $${amount} aprobada para pago`,
           'reimbursement',
           id,
@@ -152,7 +158,7 @@ export default defineEventHandler(async (event) => {
           userId: reimbursement.user_id,
           type: 'APPROVED',
           title: 'Solicitud aprobada',
-          message: `Tu solicitud #${id} de $${amount} ha sido aprobada y está lista para pago`,
+          message: `Tu solicitud #${id} de $${amount} ha sido aprobada. Espera el pago.`,
           referenceType: 'reimbursement',
           referenceId: id,
           url: '/reembolsos',
@@ -178,14 +184,27 @@ export default defineEventHandler(async (event) => {
       await createNotification({
         userId: reimbursement.user_id,
         type: 'PROCESSED',
-        title: 'Reembolso procesado',
-        message: `Tu solicitud #${id} de $${amount} ha sido procesada${paymentRef ? ` (Ref: ${paymentRef})` : ''}`,
+        title: 'Pago Enviado',
+        message: `Se ha procesado el pago de la solicitud #${id}. Por favor confirma cuando recibas el dinero.`,
         referenceType: 'reimbursement',
         referenceId: id,
         url: '/reembolsos',
         actorUserId: user.id
       });
       break;
+      
+    case 'CONFIRM_RECEIPT':
+        // Notify Treasury that the loop is closed
+        await notifyRoleUsers(
+          'TESORERIA',
+          'COMPLETED',
+          'Reembolso Completado',
+          `El usuario confirmó la recepción del reembolso #${id}`,
+          'reimbursement',
+          id,
+          { url: '/tesoreria', actorUserId: user.id }
+        );
+        break;
   }
 
   return {
@@ -200,13 +219,15 @@ export default defineEventHandler(async (event) => {
 function getActionMessage(action: string, newStatus: string): string {
   switch (action) {
     case 'APPROVE':
-      if (newStatus === 'PENDING_FISCAL_REVIEW') return 'Aprobado operativamente, enviado a revisión fiscal';
-      if (newStatus === 'APPROVED') return 'Aprobado para pago';
+      if (newStatus === 'PENDING_FISCAL_REVIEW') return 'Enviado a revisión fiscal';
+      if (newStatus === 'APPROVED') return 'Aprobado para Tesorería';
       break;
     case 'RETURN':
       return 'Devuelto al solicitante';
     case 'PROCESS':
-      return 'Marcado como procesado/pagado';
+      return 'Marcado como PAGADO';
+    case 'CONFIRM_RECEIPT':
+      return 'Recepción confirmada. Proceso finalizado.';
   }
   return 'Acción completada';
 }
