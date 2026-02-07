@@ -4,7 +4,7 @@
     <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
       <div>
         <h1 class="text-3xl font-bold text-slate-900">Tesorería / Bancos</h1>
-        <p class="text-slate-500 mt-1">Gestión de impresiones y pagos finales.</p>
+        <p class="text-slate-500 mt-1">Gestión de impresiones, archivo y pagos finales.</p>
       </div>
       
       <!-- Actions Toolbar -->
@@ -13,19 +13,22 @@
             {{ selectedIds.length }} seleccionados
          </div>
          
-         <!-- Action 1: PRINT (First Step) -->
+         <!-- Action: PRINT (Available in ALL tabs) -->
+         <!-- In 'printing' tab it is primary action (Black). In others it is secondary (White/Gray) for re-prints. -->
          <button 
-            v-if="activeTab === 'printing'"
             @click="printBatch" 
             :disabled="processing"
-            class="bg-slate-900 hover:bg-slate-800 text-white px-6 py-2.5 rounded-xl font-bold shadow-lg flex items-center gap-2 transition-all disabled:opacity-50"
+            class="px-6 py-2.5 rounded-xl font-bold shadow-lg flex items-center gap-2 transition-all disabled:opacity-50"
+            :class="activeTab === 'printing' 
+              ? 'bg-slate-900 hover:bg-slate-800 text-white' 
+              : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'"
          >
             <PrinterIcon v-if="!processing" class="w-5 h-5" />
-            <span v-else class="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
-            {{ processing ? 'Generando PDF...' : '1. Imprimir y Archivar' }}
+            <span v-else class="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin"></span>
+            {{ processing ? 'Generando PDF...' : (activeTab === 'printing' ? '1. Imprimir y Archivar' : 'Re-imprimir Copia') }}
          </button>
 
-         <!-- Action 2: PAY (Second Step) -->
+         <!-- Action: PAY (Only in Payment Step) -->
          <button 
             v-if="activeTab === 'payment'"
             @click="openPaymentModal" 
@@ -98,8 +101,8 @@
     <div class="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
        <div class="p-4 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
           <h3 class="font-bold text-slate-700 flex items-center gap-2">
-             <span v-if="activeTab === 'printing'">Aprobados (Requiere Impresión)</span>
-             <span v-else-if="activeTab === 'payment'">Impresos (Listos para Pago)</span>
+             <span v-if="activeTab === 'printing'">Pendientes de Impresión y Archivo</span>
+             <span v-else-if="activeTab === 'payment'">Archivados y Listos para Pago</span>
              <span v-else>Historial de Pagos</span>
           </h3>
           <button @click="toggleSelectAll" class="text-sm font-semibold text-indigo-600 hover:text-indigo-800">
@@ -198,7 +201,7 @@
 <script setup lang="ts">
 import { 
    PrinterIcon, ArchiveBoxIcon, CheckIcon, MagnifyingGlassIcon, 
-   CurrencyDollarIcon, BanknotesIcon 
+   CurrencyDollarIcon, BanknotesIcon, CheckCircleIcon 
 } from '@heroicons/vue/24/outline';
 
 const items = ref<any[]>([]);
@@ -223,7 +226,7 @@ const getStatusClass = (s: string, archivedAt: string) => {
    if (s === 'APPROVED' && !archivedAt) return 'bg-amber-100 text-amber-800'; // Waiting Print
    if (s === 'APPROVED' && archivedAt) return 'bg-indigo-100 text-indigo-800'; // Ready to Pay
    if (s === 'PROCESSED') return 'bg-emerald-100 text-emerald-800'; // Paid
-   if (s === 'RECEIVED') return 'bg-emerald-600 text-white'; // Completed
+   if (s === 'RECEIVED') return 'bg-slate-800 text-white'; // Completed
    return 'bg-slate-100 text-slate-800';
 }
 const getStatusLabel = (s: string, archivedAt: string) => {
@@ -243,43 +246,23 @@ const refresh = async () => {
          month: selectedMonth.value
       };
 
-      // 1. Printing: APPROVED but NOT ARCHIVED
       if (activeTab.value === 'printing') {
          params.status = 'APPROVED';
          params.archived = 'false';
       } 
-      // 2. Payment: APPROVED AND ARCHIVED (Printed)
       else if (activeTab.value === 'payment') {
          params.status = 'APPROVED';
          params.archived = 'true';
       } 
-      // 3. History: PROCESSED OR RECEIVED
       else if (activeTab.value === 'history') {
-         // We fetch both, handled by backend usually via OR but here we rely on basic filters.
-         // Let's just fetch PROCESSED. (Received items are also technically processed but in final state).
-         // Update backend to handle array or fetch all if not specified.
-         // For now, let's fetch everything that is processed or later.
-         // Actually, let's allow fetching by multiple statuses in backend?
-         // Simplification: Fetch PROCESSED in UI, RECEIVED items usually won't show unless backend supports multiple.
-         // HACK: Use 'pagado' filter which maps to PROCESSED, but we need RECEIVED too.
-         // Let's modify index.get.ts to support multiple statuses OR logic if needed.
-         // Current index.get.ts maps specific string to exact SQL.
-         // Let's try sending no status but filter in UI or backend.
-         // Or better, let's just use 'pagado' and 'finalizado'.
-         // Let's update backend to support list?
-         // For simplicity: History tab will show PROCESSED items. 
-         // TODO: Make sure backend returns RECEIVED items too if we want them here.
-         // Let's assume for this specific view, Tesoreria mainly cares about what they paid.
+         // History typically shows processed items. 
+         // Note: Users can still re-print completed (RECEIVED) items by searching for them here if backend allows.
+         // For now, we mainly load PROCESSED to see payment history.
          params.status = 'PROCESSED'; 
-         // If you want RECEIVED items too, you might need to adjust backend filter to allow multiple or an "advanced" status filter.
+         // If you need to see 'RECEIVED' (Finalized) items too, the backend must support status lists or we assume 'PROCESSED' is the filter for "Paid by Treasury".
       }
 
       const res = await $fetch<any>('/api/reimbursements', { params });
-      
-      // If History tab, manually fetch RECEIVED items too and merge? Or just stick to PROCESSED.
-      // Ideally backend handles "status IN (...)". 
-      // For now, let's assume History shows PROCESSED items which are the ones Tesoreria just acted on.
-      
       items.value = res.items || [];
    } finally {
       loading.value = false;
@@ -324,6 +307,8 @@ const printBatch = async () => {
       document.body.removeChild(link);
       window.URL.revokeObjectURL(url);
       
+      // If we were in printing tab, items should move to payment tab now.
+      // If we are in other tabs (re-printing), we just stay.
       if(activeTab.value === 'printing') {
          setTimeout(() => refresh(), 1000);
       }

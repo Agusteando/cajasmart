@@ -7,7 +7,7 @@ import fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import sharp from 'sharp';
 
-// Helper to draw text with truncation
+// Helper to draw text with strict truncation to avoid overflow
 function drawCell(page: any, x: number, y: number, width: number, height: number, text: string, font: any, fontSize: number = 9) {
   // Border
   page.drawRectangle({
@@ -21,13 +21,17 @@ function drawCell(page: any, x: number, y: number, width: number, height: number
 
   if (text) {
     const safeText = String(text).replace(/\n/g, ' ').trim();
-    // Rough calc: average char width approx fontSize * 0.5. 
-    // We leave some padding (approx 8px).
-    const maxChars = Math.floor((width - 8) / (fontSize * 0.5));
+    
+    // Calculate max characters that roughly fit
+    // Average char width for Helvetica is ~0.6 * fontSize (conservative estimate for safety)
+    // We leave 8px padding total (4px left, 4px right)
+    const availableWidth = width - 8;
+    const avgCharWidth = fontSize * 0.6; 
+    const maxChars = Math.floor(availableWidth / avgCharWidth);
     
     let finalText = safeText;
     if (safeText.length > maxChars) {
-       finalText = safeText.substring(0, maxChars - 3) + '...';
+       finalText = safeText.substring(0, Math.max(0, maxChars - 3)) + '...';
     }
 
     page.drawText(finalText, {
@@ -41,6 +45,7 @@ function drawCell(page: any, x: number, y: number, width: number, height: number
 }
 
 export default defineEventHandler(async (event) => {
+  // Tesoreria handles printing. Super Admin too.
   const user = requireRole(event, ['TESORERIA', 'SUPER_ADMIN']);
   const body = await readBody(event);
   const { ids } = body;
@@ -102,6 +107,7 @@ export default defineEventHandler(async (event) => {
     const razonSocial = r.razon_social || 'INSTITUTO EDUCATIVO PARA EL DESARROLLO INTEGRAL DEL SABER SC';
     const isDeducible = !!r.is_deducible;
 
+    // --- A. Summary Sheet ---
     const page = pdfDoc.addPage();
     const { width, height } = page.getSize();
     let y = height - 60;
@@ -135,10 +141,10 @@ export default defineEventHandler(async (event) => {
 
     y -= 50;
 
-    // Header Info
-    const cleanPlantel = (r.plantel_nombre || 'N/A').replace(/\n/g, ' ').substring(0, 50);
-    const cleanAdmin = (r.solicitante_nombre || '').replace(/\n/g, ' ').substring(0, 50);
-    
+    // Info Header
+    const cleanPlantel = (r.plantel_nombre || 'N/A').substring(0, 55);
+    const cleanAdmin = (r.solicitante_nombre || '').substring(0, 55);
+
     page.drawText(`PLANTEL: ${cleanPlantel}`, { x: 50, y, size: 10, font });
     y -= 18;
     page.drawText(`NOMBRE DEL ADMINISTRADOR: ${cleanAdmin}`, { x: 50, y, size: 10, font });
@@ -149,7 +155,6 @@ export default defineEventHandler(async (event) => {
     page.drawText(`FOLIO: R-${String(r.id).padStart(5, '0')}`, { x: 430, y: y + 3, size: 12, font: fontBold, color: rgb(0.8, 0, 0) });
     y -= 30;
 
-    // Table Header
     const cols = [
       { name: 'FECHA', w: 60 },
       { name: 'FACTURA', w: 70 },
@@ -168,17 +173,19 @@ export default defineEventHandler(async (event) => {
 
     for (const item of rItems) {
       if (y < 100) { 
-        // Simple page break support if needed, but for receipts usually fits one page. 
-        // Truncating list for now to avoid complexity in this snippet.
+        // If we ran out of space, we could add a new page, but usually receipt summaries are short.
+        // For simplicity in this snippet we just stop drawing rows if it overflows the page bottom.
+        // In a full production system, pagination logic would go here.
+      } else {
+        x = 40;
+        drawCell(page, x, y, 60, 20, item.invoice_date || '-', font, 8); x += 60;
+        drawCell(page, x, y, 70, 20, item.invoice_number || '-', font, 8); x += 70;
+        drawCell(page, x, y, 120, 20, item.provider || '-', font, 8); x += 120;
+        drawCell(page, x, y, 100, 20, item.concept || '-', font, 8); x += 100;
+        drawCell(page, x, y, 120, 20, item.description || '-', font, 8); x += 120;
+        drawCell(page, x, y, 60, 20, `$${Number(item.amount).toFixed(2)}`, font, 8);
+        y -= 20;
       }
-      x = 40;
-      drawCell(page, x, y, 60, 20, item.invoice_date || '-', font, 8); x += 60;
-      drawCell(page, x, y, 70, 20, item.invoice_number || '-', font, 8); x += 70;
-      drawCell(page, x, y, 120, 20, item.provider || '-', font, 8); x += 120;
-      drawCell(page, x, y, 100, 20, item.concept || '-', font, 8); x += 100;
-      drawCell(page, x, y, 120, 20, item.description || '-', font, 8); x += 120;
-      drawCell(page, x, y, 60, 20, `$${Number(item.amount).toFixed(2)}`, font, 8);
-      y -= 20;
     }
 
     drawCell(page, 40, y, 470, 20, 'TOTAL', fontBold);
@@ -200,7 +207,9 @@ export default defineEventHandler(async (event) => {
       color: rgb(0.6, 0.6, 0.6)
     });
 
+    // --- B. Merge Attachments ---
     const uniqueFiles = [...new Set(rItems.map((i: any) => i.file_url).filter(Boolean))];
+
     for (const fileUrl of uniqueFiles) {
       try {
         const filePath = path.join(uploadDir, String(fileUrl));
@@ -240,7 +249,8 @@ export default defineEventHandler(async (event) => {
     }
   }
 
-  // MARK AS PRINTED (ARCHIVED)
+  // MARK AS PRINTED/ARCHIVED (Does NOT change Workflow Status, just archive timestamp)
+  // This allows printing at any time without disrupting the flow.
   await db.execute(
     `UPDATE reimbursements SET archived_at = NOW(), archived_by = ? WHERE id IN (${placeholders})`,
     [user.id, ...ids]
@@ -253,7 +263,7 @@ export default defineEventHandler(async (event) => {
     entityId: 0,
     action: 'PRINT',
     actorUserId: user.id,
-    comment: `Printed & Archived ${ids.length} items. Ref: ${batchId}`
+    comment: `Printed/Reprinted ${ids.length} items. Ref: ${batchId}`
   });
 
   setHeaders(event, {
