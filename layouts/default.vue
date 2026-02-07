@@ -56,17 +56,11 @@
           to="/tesoreria"
           icon="BanknotesIcon"
         >
-          Tesorería
+          Tesorería / Bancos
           <span v-if="counts.treasury > 0" class="ml-auto bg-emerald-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">{{ counts.treasury }}</span>
         </NavLink>
-
-        <NavLink
-          v-if="user?.role_name === 'RH' || user?.role_name === 'SUPER_ADMIN'"
-          to="/rh"
-          icon="FolderOpenIcon"
-        >
-          Recursos Humanos
-        </NavLink>
+        
+        <!-- Removed RH Link here -->
 
         <NavLink to="/notificaciones" icon="BellIcon">Notificaciones</NavLink>
 

@@ -33,7 +33,8 @@ function drawCell(page: any, x: number, y: number, width: number, height: number
 }
 
 export default defineEventHandler(async (event) => {
-  const user = requireRole(event, ['RH', 'SUPER_ADMIN']);
+  // CHANGED: Added TESORERIA, removed RH requirement (though kept for legacy safety if role still exists)
+  const user = requireRole(event, ['RH', 'TESORERIA', 'SUPER_ADMIN']);
   const body = await readBody(event);
   const { ids } = body;
 
@@ -200,7 +201,7 @@ export default defineEventHandler(async (event) => {
     page.drawText('ENTREGA ADMINISTRADOR', { x: 90, y: sigY - 12, size: 8, font });
 
     page.drawLine({ start: { x: 340, y: sigY }, end: { x: 520, y: sigY }, thickness: 1 });
-    page.drawText('RECIBE: CONTABILIDAD / RH', { x: 370, y: sigY - 12, size: 8, font });
+    page.drawText('RECIBE: TESORERÍA / BANCOS', { x: 370, y: sigY - 12, size: 8, font });
 
     // Footer
     page.drawText(`Sistema CajaSmart | Batch: ${batchId} | Printed: ${new Date().toISOString()}`, {

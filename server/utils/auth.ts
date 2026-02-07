@@ -134,6 +134,7 @@ export function requireRole(event: H3Event, allowedRoles: string[]): SessionUser
  * Logic: Does this user need onboarding?
  */
 export function needsOnboarding(user: SessionUser): boolean {
+  // RH is effectively merged into TESORERIA, but kept here for backward compatibility
   const validRoles = ['ADMIN_PLANTEL', 'REVISOR_OPS', 'REVISOR_FISCAL', 'TESORERIA', 'RH', 'SUPER_ADMIN'];
 
   if (!user.role_name || !validRoles.includes(user.role_name)) return true;
@@ -157,7 +158,8 @@ export function getHomePageForRole(roleName: string): string {
     case 'TESORERIA':
       return '/tesoreria';
     case 'RH':
-      return '/rh';
+      // Legacy RH users should go to Tesoreria now
+      return '/tesoreria';
     case 'SUPER_ADMIN':
       return '/';
     default:
