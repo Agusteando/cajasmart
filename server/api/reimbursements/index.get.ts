@@ -9,8 +9,9 @@ function mapStatus(s: string): string {
     case 'PENDING_FISCAL_REVIEW': return 'en_revision';
     case 'RETURNED': return 'rechazado';
     case 'APPROVED': return 'aprobado';
+    case 'ON_HOLD': return 'retenido'; // New
     case 'PROCESSED': return 'pagado';
-    case 'RECEIVED': return 'finalizado'; // NEW
+    case 'RECEIVED': return 'finalizado';
     default: return 'borrador';
   }
 }
@@ -21,7 +22,7 @@ export default defineEventHandler(async (event) => {
   
   const search = String(q.q || '').trim().toLowerCase();
   const estadoFilter = String(q.estado || '').trim();
-  const statusFilter = String(q.status || '').trim();
+  const statusFilter = String(q.status || '').trim(); // Exact DB status
   const monthFilter = String(q.month || '').trim(); 
   const archivedFilter = q.archived; 
 
@@ -41,11 +42,14 @@ export default defineEventHandler(async (event) => {
   const conditions: string[] = [];
   const params: any[] = [];
 
+  // Role Scoping
   if (user.role_name === 'SUPER_ADMIN') {
+     // No scope
   } else if (user.role_name === 'ADMIN_PLANTEL') {
     conditions.push('r.user_id = ?');
     params.push(user.id);
   } else {
+    // Reviewers/Treasury see assigned planteles
     conditions.push(`
       r.plantel_id IN (
         SELECT plantel_id FROM user_planteles WHERE user_id = ?
@@ -54,18 +58,25 @@ export default defineEventHandler(async (event) => {
     params.push(user.id);
   }
 
+  // Frontend State Filter
   if (estadoFilter) {
     if (estadoFilter === 'borrador') conditions.push("r.status = 'DRAFT'");
     else if (estadoFilter === 'en_revision') conditions.push("r.status IN ('PENDING_OPS_REVIEW', 'PENDING_FISCAL_REVIEW')");
-    else if (estadoFilter === 'aprobado') conditions.push("r.status = 'APPROVED'");
+    else if (estadoFilter === 'aprobado') conditions.push("r.status IN ('APPROVED', 'ON_HOLD')"); // Approved + Retenido group together often
     else if (estadoFilter === 'rechazado') conditions.push("r.status = 'RETURNED'");
     else if (estadoFilter === 'pagado') conditions.push("r.status = 'PROCESSED'");
     else if (estadoFilter === 'finalizado') conditions.push("r.status = 'RECEIVED'");
   }
 
+  // Strict DB Status Filter (Used by Treasury Tabs)
   if (statusFilter) {
-    conditions.push('r.status = ?');
-    params.push(statusFilter);
+    // Treasury "Por Pagar" tab might want APPROVED or ON_HOLD
+    if (statusFilter === 'READY_TO_PAY') {
+        conditions.push("r.status IN ('APPROVED', 'ON_HOLD')");
+    } else {
+        conditions.push('r.status = ?');
+        params.push(statusFilter);
+    }
   }
 
   if (monthFilter) {
@@ -110,6 +121,7 @@ export default defineEventHandler(async (event) => {
   const results = await Promise.all(rows.map(async (r: any) => {
     const myItems = itemsMap[r.id] || [];
     
+    // Search refinement on items
     if (search) {
       const haystack = [
         r.id, 
@@ -123,7 +135,6 @@ export default defineEventHandler(async (event) => {
 
     const dbFileUrl = myItems[0]?.file_url || null;
     const existsOnDisk = await isFileOnDisk(dbFileUrl);
-    const finalFileUrl = existsOnDisk ? dbFileUrl : null;
 
     return {
       id: String(r.id),
@@ -139,8 +150,7 @@ export default defineEventHandler(async (event) => {
       archived_at: r.archived_at,
       payment_method: r.payment_method, 
       payment_ref: r.payment_ref,
-      file_url: finalFileUrl, 
-      db_file_url: dbFileUrl, 
+      file_url: existsOnDisk ? dbFileUrl : null, 
       conceptos: myItems.map((i: any) => ({
         id: String(i.id),
         invoice_date: i.invoice_date,

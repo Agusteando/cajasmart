@@ -5,7 +5,8 @@ import {
   ArrowPathIcon,
   ExclamationCircleIcon,
   CheckCircleIcon,
-  ClockIcon
+  ClockIcon,
+  PauseCircleIcon
 } from '@heroicons/vue/24/outline';
 import { useUserCookie } from '~/composables/useUserCookie';
 
@@ -19,32 +20,50 @@ const data = ref<any>({ swimlanes: [], totalDaysInMonth: 30 });
 // -- STAGE DEFINITIONS --
 const getStageStyle = (status: string, lagDays: number) => {
   // Base Colors
-  let bg = 'bg-slate-300'; // Draft/Unknown
+  let bg = 'bg-slate-300'; // Default
   let border = 'border-slate-400';
-  
-  if (status === 'PENDING_OPS_REVIEW') {
-    bg = 'bg-amber-400';
-    border = 'border-amber-500';
-  } else if (status === 'PENDING_FISCAL_REVIEW') {
-    bg = 'bg-blue-400';
-    border = 'border-blue-500';
-  } else if (status === 'APPROVED') {
-    bg = 'bg-indigo-500';
-    border = 'border-indigo-600';
-  } else if (status === 'PROCESSED') {
-    bg = 'bg-emerald-500';
-    border = 'border-emerald-600';
-  } else if (status === 'RETURNED') {
-    bg = 'bg-rose-500';
-    border = 'border-rose-600';
+  let pattern = ''; // For ON_HOLD stripes
+
+  switch (status) {
+    case 'PENDING_OPS_REVIEW':
+      bg = 'bg-amber-400';
+      border = 'border-amber-500';
+      break;
+    case 'PENDING_FISCAL_REVIEW':
+      bg = 'bg-blue-400';
+      border = 'border-blue-500';
+      break;
+    case 'APPROVED': // Waiting for Treasury Print/Pay
+      bg = 'bg-indigo-500';
+      border = 'border-indigo-600';
+      break;
+    case 'ON_HOLD': // Retenido (Treasury)
+      bg = 'bg-fuchsia-500';
+      border = 'border-fuchsia-600';
+      // CSS stripe pattern class
+      pattern = 'bg-[url("data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNCIgaGVpZ2h0PSI0IiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxwYXRoIGQ9Ik0xIDNMMCA0TDEgNUw0IDJMMyAxTDEgM1oiIGZpbGw9InJnYmEoMjU1LDI1NSwyNTUsMC4yKSIvPjwvc3ZnPg==")]';
+      break;
+    case 'PROCESSED': // Paid by Treasury, waiting confirmation
+      bg = 'bg-teal-400'; 
+      border = 'border-teal-500';
+      break;
+    case 'RECEIVED': // Cycle Complete
+      bg = 'bg-emerald-600';
+      border = 'border-emerald-700';
+      break;
+    case 'RETURNED':
+      bg = 'bg-rose-500';
+      border = 'border-rose-600';
+      break;
   }
 
-  // Lagging Indicator (If pending and > 5 days, make it look urgent)
-  const isPending = ['PENDING_OPS_REVIEW', 'PENDING_FISCAL_REVIEW', 'APPROVED'].includes(status);
+  // Lagging Indicator (If pending and > 5 days)
+  // ON_HOLD is always considered "lagging" visually if it stays there too long
+  const isPending = ['PENDING_OPS_REVIEW', 'PENDING_FISCAL_REVIEW', 'APPROVED', 'ON_HOLD'].includes(status);
   const isLagging = isPending && lagDays > 5;
   
   return {
-    classes: `${bg} border-l-2 ${border} ${isLagging ? 'animate-pulse shadow-md shadow-red-200' : ''}`,
+    classes: `${bg} ${pattern} border-l-2 ${border} ${isLagging ? 'animate-pulse shadow-md shadow-red-200' : ''}`,
     isLagging
   };
 };
@@ -66,7 +85,7 @@ onMounted(async () => {
      const status = await $fetch('/api/onboarding/status');
      const target = status.homePage || '/reembolsos';
      if (target !== '/') return navigateTo(target);
-     return; // Normal dashboard logic would go here if needed
+     return;
   }
   fetchBI();
 });
@@ -87,17 +106,19 @@ const openTicket = (id: number) => window.open(`/reembolsos?q=R-${String(id).pad
               Timeline Operativo
            </h1>
            <p class="text-xs text-slate-500 font-bold uppercase tracking-wider">
-              Seguimiento de tiempos y estancamientos por plantel
+              Seguimiento de tiempos: Ops &rarr; Fiscal &rarr; Tesorería &rarr; Pago
            </p>
         </div>
 
         <div class="flex items-center gap-3">
            <!-- Legend -->
-           <div class="hidden lg:flex items-center gap-3 text-[10px] font-bold uppercase text-slate-500 mr-4 border-r border-slate-200 pr-4">
+           <div class="hidden xl:flex items-center gap-3 text-[10px] font-bold uppercase text-slate-500 mr-4 border-r border-slate-200 pr-4">
               <div class="flex items-center gap-1"><div class="w-3 h-3 bg-amber-400 rounded-sm"></div> Ops</div>
               <div class="flex items-center gap-1"><div class="w-3 h-3 bg-blue-400 rounded-sm"></div> Fiscal</div>
-              <div class="flex items-center gap-1"><div class="w-3 h-3 bg-indigo-500 rounded-sm"></div> Pago</div>
-              <div class="flex items-center gap-1"><div class="w-3 h-3 bg-emerald-500 rounded-sm"></div> Listo</div>
+              <div class="flex items-center gap-1"><div class="w-3 h-3 bg-indigo-500 rounded-sm"></div> Tesorería</div>
+              <div class="flex items-center gap-1"><div class="w-3 h-3 bg-fuchsia-500 rounded-sm"></div> Retenido</div>
+              <div class="flex items-center gap-1"><div class="w-3 h-3 bg-teal-400 rounded-sm"></div> Pagado</div>
+              <div class="flex items-center gap-1"><div class="w-3 h-3 bg-emerald-600 rounded-sm"></div> Finalizado</div>
            </div>
 
            <div class="relative group">
@@ -156,7 +177,7 @@ const openTicket = (id: number) => window.open(`/reembolsos?q=R-${String(id).pad
                          {{ lane.items.length }} solicitudes
                       </span>
                       <!-- Alert if lagging items exist -->
-                      <span v-if="lane.items.some((i:any) => i.lagDays > 5 && i.status !== 'PROCESSED')" class="flex items-center gap-1 text-[10px] font-bold text-rose-600 bg-rose-50 px-2 py-0.5 rounded">
+                      <span v-if="lane.items.some((i:any) => i.lagDays > 5 && i.status !== 'PROCESSED' && i.status !== 'RECEIVED')" class="flex items-center gap-1 text-[10px] font-bold text-rose-600 bg-rose-50 px-2 py-0.5 rounded">
                          <ExclamationCircleIcon class="w-3 h-3" /> Atraso
                       </span>
                    </div>
@@ -184,10 +205,14 @@ const openTicket = (id: number) => window.open(`/reembolsos?q=R-${String(id).pad
                            }"
                            :title="`Folio: ${item.folio}\nEstado: ${item.status}\nDías: ${item.lagDays}\nSolicitante: ${item.solicitante}`"
                       >
-                         <!-- Label inside bar (if wide enough) -->
-                         <span v-if="item.widthPct > 5" class="drop-shadow-md mr-1 opacity-90">{{ item.folio }}</span>
+                         <!-- Status Icons inside Bar -->
+                         <PauseCircleIcon v-if="item.status === 'ON_HOLD'" class="w-3 h-3 mr-1" />
+                         <CheckCircleIcon v-if="item.status === 'RECEIVED'" class="w-3 h-3 mr-1" />
                          
-                         <!-- Details on Hover (Tooltip-ish inside) -->
+                         <!-- Label -->
+                         <span v-if="item.widthPct > 5" class="drop-shadow-md mr-1 opacity-95">{{ item.folio }}</span>
+                         
+                         <!-- Details on Hover -->
                          <div v-if="item.widthPct > 15" class="opacity-0 group-hover/bar:opacity-100 transition-opacity ml-auto flex items-center gap-1 bg-black/20 px-1.5 py-0.5 rounded text-[9px]">
                             <ClockIcon class="w-3 h-3" /> {{ item.lagDays }}d
                          </div>
@@ -205,25 +230,40 @@ const openTicket = (id: number) => window.open(`/reembolsos?q=R-${String(id).pad
 
        <!-- LEGEND FOOTER -->
        <div class="mt-6 flex flex-wrap gap-4 justify-center text-xs text-slate-500">
+          <!-- Ops -->
           <div class="flex items-center gap-2">
              <div class="w-4 h-4 bg-amber-400 rounded border border-amber-500"></div>
-             <span>Revisión Operativa</span>
+             <span>Ops</span>
           </div>
+          <!-- Fiscal -->
           <div class="flex items-center gap-2">
              <div class="w-4 h-4 bg-blue-400 rounded border border-blue-500"></div>
-             <span>Revisión Fiscal</span>
+             <span>Fiscal</span>
           </div>
+          <!-- Treasury -->
           <div class="flex items-center gap-2">
              <div class="w-4 h-4 bg-indigo-500 rounded border border-indigo-600"></div>
-             <span>Aprobado (Por Pagar)</span>
+             <span>Por Pagar</span>
           </div>
+          <!-- On Hold -->
           <div class="flex items-center gap-2">
-             <div class="w-4 h-4 bg-emerald-500 rounded border border-emerald-600"></div>
-             <span>Pagado (Finalizado)</span>
+             <div class="w-4 h-4 bg-fuchsia-500 rounded border border-fuchsia-600"></div>
+             <span>Retenido</span>
           </div>
+          <!-- Processed -->
+          <div class="flex items-center gap-2">
+             <div class="w-4 h-4 bg-teal-400 rounded border border-teal-500"></div>
+             <span>Pagado (Tránsito)</span>
+          </div>
+          <!-- Received -->
+          <div class="flex items-center gap-2">
+             <div class="w-4 h-4 bg-emerald-600 rounded border border-emerald-700"></div>
+             <span>Finalizado</span>
+          </div>
+          
           <div class="flex items-center gap-2 ml-4">
              <ExclamationCircleIcon class="w-4 h-4 text-rose-600" />
-             <span class="font-bold text-rose-600">Alerta de Atraso (>5 días sin avance)</span>
+             <span class="font-bold text-rose-600">Alerta de Atraso (>5 días)</span>
           </div>
        </div>
     </div>
@@ -234,7 +274,6 @@ const openTicket = (id: number) => window.open(`/reembolsos?q=R-${String(id).pad
 </template>
 
 <style scoped>
-/* Ensure horizontal scroll works smoothly */
 .overflow-x-auto {
   scrollbar-width: thin;
   scrollbar-color: #cbd5e1 transparent;

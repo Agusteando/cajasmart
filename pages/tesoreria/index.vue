@@ -8,13 +8,21 @@
       </div>
       
       <!-- Actions Toolbar -->
-      <div v-if="selectedIds.length > 0" class="flex gap-3 animate-fade-in">
+      <div v-if="selectedIds.length > 0" class="flex flex-wrap gap-3 animate-fade-in">
          <div class="bg-indigo-50 px-4 py-2 rounded-xl border border-indigo-100 text-indigo-700 font-bold flex items-center">
             {{ selectedIds.length }} seleccionados
          </div>
          
-         <!-- Action: PRINT (Available in ALL tabs) -->
-         <!-- In 'printing' tab it is primary action (Black). In others it is secondary (White/Gray) for re-prints. -->
+         <!-- Action: EDIT (Type/Status) -->
+         <button 
+            @click="openEditModal"
+            class="bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 px-4 py-2.5 rounded-xl font-bold shadow-sm flex items-center gap-2 transition-all"
+         >
+            <PencilSquareIcon class="w-5 h-5" />
+            Editar Estado/Tipo
+         </button>
+
+         <!-- Action: PRINT -->
          <button 
             @click="printBatch" 
             :disabled="processing"
@@ -25,19 +33,7 @@
          >
             <PrinterIcon v-if="!processing" class="w-5 h-5" />
             <span v-else class="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin"></span>
-            {{ processing ? 'Generando PDF...' : (activeTab === 'printing' ? '1. Imprimir y Archivar' : 'Re-imprimir Copia') }}
-         </button>
-
-         <!-- Action: PAY (Only in Payment Step) -->
-         <button 
-            v-if="activeTab === 'payment'"
-            @click="openPaymentModal" 
-            :disabled="processing"
-            class="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-2.5 rounded-xl font-bold shadow-lg shadow-emerald-200 flex items-center gap-2 transition-all disabled:opacity-50"
-         >
-            <CurrencyDollarIcon v-if="!processing" class="w-5 h-5" />
-            <span v-else class="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
-            {{ processing ? 'Procesando...' : '2. Pagar (Cheque/Transf)' }}
+            {{ processing ? 'Generando PDF...' : 'Imprimir PDF' }}
          </button>
       </div>
     </div>
@@ -63,7 +59,7 @@
              :class="activeTab === 'payment' ? 'bg-indigo-50 text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'"
           >
              <BanknotesIcon class="w-4 h-4" />
-             2. Por Pagar
+             2. Por Pagar (Retenidos/Listos)
           </button>
 
           <!-- History -->
@@ -73,7 +69,7 @@
              :class="activeTab === 'history' ? 'bg-indigo-50 text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'"
           >
              <ArchiveBoxIcon class="w-4 h-4" />
-             Historial
+             Historial Pagos
           </button>
        </div>
 
@@ -102,8 +98,8 @@
        <div class="p-4 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
           <h3 class="font-bold text-slate-700 flex items-center gap-2">
              <span v-if="activeTab === 'printing'">Pendientes de Impresión y Archivo</span>
-             <span v-else-if="activeTab === 'payment'">Archivados y Listos para Pago</span>
-             <span v-else>Historial de Pagos</span>
+             <span v-else-if="activeTab === 'payment'">Archivados y Gestión de Pagos</span>
+             <span v-else>Historial Completado</span>
           </h3>
           <button @click="toggleSelectAll" class="text-sm font-semibold text-indigo-600 hover:text-indigo-800">
              {{ allSelected ? 'Deseleccionar todo' : 'Seleccionar todo' }}
@@ -173,25 +169,47 @@
        </table>
     </div>
 
-    <!-- PAYMENT CONFIRMATION MODAL -->
-    <div v-if="showPaymentModal" class="fixed inset-0 z-50 flex items-center justify-center p-4">
-       <div class="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" @click="showPaymentModal = false"></div>
+    <!-- UPDATE MODAL (Type & Status) -->
+    <div v-if="showUpdateModal" class="fixed inset-0 z-50 flex items-center justify-center p-4">
+       <div class="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" @click="showUpdateModal = false"></div>
        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md relative z-10 overflow-hidden p-6 animate-fade-in-up">
-          <h3 class="text-xl font-bold text-slate-900 mb-2">Confirmar Pagos</h3>
+          <h3 class="text-xl font-bold text-slate-900 mb-2">Modificar Solicitud(es)</h3>
           <p class="text-slate-500 text-sm mb-6">
-             Se marcarán <strong>{{ selectedIds.length }}</strong> solicitudes como pagadas.
-             <br/>
-             El sistema asignará automáticamente <strong>CHEQUE</strong> a las facturas deducibles y <strong>NO CHEQUE</strong> a las no deducibles.
+             Editando <strong>{{ selectedIds.length }}</strong> elementos seleccionados.
           </p>
           
-          <div class="mb-6">
-             <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Referencia General (Opcional)</label>
-             <input v-model="paymentRefInput" placeholder="Ej: Lote #123 / Transferencia masiva" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500" />
+          <div class="space-y-4">
+             <!-- Source Type -->
+             <div>
+                <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Tipo de Origen</label>
+                <select v-model="formUpdate.type" class="w-full border border-slate-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500">
+                   <option value="">(Sin cambios)</option>
+                   <option value="deducible">Deducible</option>
+                   <option value="no_deducible">No Deducible</option>
+                </select>
+             </div>
+
+             <!-- Status -->
+             <div>
+                <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Estado / Acción</label>
+                <select v-model="formUpdate.status" class="w-full border border-slate-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500">
+                   <option value="">(Sin cambios)</option>
+                   <option value="RETENIDO">Retenido (On Hold)</option>
+                   <option value="CHEQUE">Cheque emitido (Finalizar)</option>
+                   <option value="EFECTIVO">Envío de efectivo (Finalizar)</option>
+                </select>
+             </div>
+
+             <!-- Reference -->
+             <div v-if="formUpdate.status === 'CHEQUE' || formUpdate.status === 'EFECTIVO'">
+                <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Referencia de Pago</label>
+                <input v-model="formUpdate.ref" placeholder="Ej: Cheque #1234 o Lote #55" class="w-full border border-slate-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500" />
+             </div>
           </div>
 
-          <div class="flex gap-3">
-             <button @click="showPaymentModal = false" class="flex-1 py-3 text-slate-600 font-bold hover:bg-slate-100 rounded-xl transition">Cancelar</button>
-             <button @click="executePayment" class="flex-1 py-3 bg-emerald-600 text-white font-bold rounded-xl hover:bg-emerald-700 transition shadow-lg">Confirmar Pagos</button>
+          <div class="flex gap-3 mt-8">
+             <button @click="showUpdateModal = false" class="flex-1 py-3 text-slate-600 font-bold hover:bg-slate-100 rounded-xl transition">Cancelar</button>
+             <button @click="executeUpdate" class="flex-1 py-3 bg-indigo-600 text-white font-bold rounded-xl hover:bg-indigo-700 transition shadow-lg">Guardar Cambios</button>
           </div>
        </div>
     </div>
@@ -201,7 +219,7 @@
 <script setup lang="ts">
 import { 
    PrinterIcon, ArchiveBoxIcon, CheckIcon, MagnifyingGlassIcon, 
-   CurrencyDollarIcon, BanknotesIcon, CheckCircleIcon 
+   BanknotesIcon, PencilSquareIcon 
 } from '@heroicons/vue/24/outline';
 
 const items = ref<any[]>([]);
@@ -210,8 +228,8 @@ const loading = ref(true);
 const processing = ref(false);
 
 // Modal State
-const showPaymentModal = ref(false);
-const paymentRefInput = ref('');
+const showUpdateModal = ref(false);
+const formUpdate = ref({ type: '', status: '', ref: '' });
 
 // Filters
 const activeTab = ref<'printing' | 'payment' | 'history'>('printing');
@@ -223,15 +241,17 @@ const fmtDate = (d: string) => new Date(d).toLocaleDateString('es-MX');
 const fmtMoney = (n: number) => `$${Number(n).toLocaleString('es-MX', { minimumFractionDigits: 2 })}`;
 
 const getStatusClass = (s: string, archivedAt: string) => {
-   if (s === 'APPROVED' && !archivedAt) return 'bg-amber-100 text-amber-800'; // Waiting Print
-   if (s === 'APPROVED' && archivedAt) return 'bg-indigo-100 text-indigo-800'; // Ready to Pay
-   if (s === 'PROCESSED') return 'bg-emerald-100 text-emerald-800'; // Paid
-   if (s === 'RECEIVED') return 'bg-slate-800 text-white'; // Completed
+   if (s === 'APPROVED' && !archivedAt) return 'bg-amber-100 text-amber-800'; 
+   if (s === 'APPROVED' && archivedAt) return 'bg-indigo-100 text-indigo-800';
+   if (s === 'ON_HOLD') return 'bg-rose-100 text-rose-800 border-rose-200 border'; // Retenido
+   if (s === 'PROCESSED') return 'bg-emerald-100 text-emerald-800';
+   if (s === 'RECEIVED') return 'bg-slate-800 text-white';
    return 'bg-slate-100 text-slate-800';
 }
 const getStatusLabel = (s: string, archivedAt: string) => {
    if (s === 'APPROVED' && !archivedAt) return 'POR IMPRIMIR';
    if (s === 'APPROVED' && archivedAt) return 'POR PAGAR';
+   if (s === 'ON_HOLD') return 'RETENIDO';
    if (s === 'PROCESSED') return 'PAGADO (Espera Conf)';
    if (s === 'RECEIVED') return 'FINALIZADO';
    return s;
@@ -251,15 +271,12 @@ const refresh = async () => {
          params.archived = 'false';
       } 
       else if (activeTab.value === 'payment') {
-         params.status = 'APPROVED';
+         // Show APPROVED (Archived) and ON_HOLD (Retenido)
+         params.status = 'READY_TO_PAY'; 
          params.archived = 'true';
       } 
       else if (activeTab.value === 'history') {
-         // History typically shows processed items. 
-         // Note: Users can still re-print completed (RECEIVED) items by searching for them here if backend allows.
-         // For now, we mainly load PROCESSED to see payment history.
          params.status = 'PROCESSED'; 
-         // If you need to see 'RECEIVED' (Finalized) items too, the backend must support status lists or we assume 'PROCESSED' is the filter for "Paid by Treasury".
       }
 
       const res = await $fetch<any>('/api/reimbursements', { params });
@@ -307,8 +324,6 @@ const printBatch = async () => {
       document.body.removeChild(link);
       window.URL.revokeObjectURL(url);
       
-      // If we were in printing tab, items should move to payment tab now.
-      // If we are in other tabs (re-printing), we just stay.
       if(activeTab.value === 'printing') {
          setTimeout(() => refresh(), 1000);
       }
@@ -319,29 +334,36 @@ const printBatch = async () => {
    }
 };
 
-const openPaymentModal = () => {
+// --- ACTION: UPDATE (Modal) ---
+const openEditModal = () => {
    if (!selectedIds.value.length) return;
-   paymentRefInput.value = '';
-   showPaymentModal.value = true;
+   formUpdate.value = { type: '', status: '', ref: '' };
+   showUpdateModal.value = true;
 }
 
-const executePayment = async () => {
+const executeUpdate = async () => {
    processing.value = true;
-   showPaymentModal.value = false;
+   showUpdateModal.value = false;
    
+   const updates: any = {};
+   if (formUpdate.value.type) updates.is_deducible = (formUpdate.value.type === 'deducible');
+   if (formUpdate.value.status) {
+      updates.treasury_status = formUpdate.value.status;
+      if (formUpdate.value.ref) updates.payment_ref = formUpdate.value.ref;
+   }
+
    try {
       await $fetch('/api/reimbursements/batch', { 
          method: 'POST', 
          body: { 
-            action: 'process', 
+            action: 'update_treasury', 
             ids: selectedIds.value, 
-            paymentRef: paymentRefInput.value
-            // paymentMethod inferred in backend
+            updates
          } 
       });
       await refresh();
    } catch (e: any) {
-      alert('Error al procesar pago: ' + e.message);
+      alert('Error al actualizar: ' + e.message);
    } finally {
       processing.value = false;
    }
@@ -351,18 +373,8 @@ onMounted(refresh);
 </script>
 
 <style scoped>
-.animate-fade-in {
-   animation: fadeIn 0.3s ease-out;
-}
-.animate-fade-in-up {
-   animation: fadeInUp 0.3s ease-out;
-}
-@keyframes fadeIn {
-   from { opacity: 0; transform: translateY(-5px); }
-   to { opacity: 1; transform: translateY(0); }
-}
-@keyframes fadeInUp {
-   from { opacity: 0; transform: scale(0.95); }
-   to { opacity: 1; transform: scale(1); }
-}
+.animate-fade-in { animation: fadeIn 0.3s ease-out; }
+.animate-fade-in-up { animation: fadeInUp 0.3s ease-out; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes fadeInUp { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
 </style>
